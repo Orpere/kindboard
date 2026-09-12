@@ -1,0 +1,19 @@
+# Rust
+/target
+Cargo.lock
+**/*.rs.bk
+
+# Build artifacts
+/dist
+
+# House plan (per-change working artifact)
+PLAN.md
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local secrets
+.env

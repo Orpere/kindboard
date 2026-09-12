@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/kindboard-core", "crates/kindboard-app"]
+resolver = "2"

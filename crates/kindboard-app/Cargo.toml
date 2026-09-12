@@ -1,0 +1,33 @@
+[package]
+name = "kindboard-app"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "kindboard desktop app: create, manage and inspect kind clusters"
+
+[lib]
+name = "kindboard_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kindboard"
+path = "src/main.rs"
+
+[dependencies]
+kindboard-core = { path = "../kindboard-core" }
+eframe = { version = "0.36", default-features = false, features = [
+    "accesskit",
+    "default_fonts",
+    "links",
+    "wayland",
+    "x11",
+    "wgpu",
+] }
+crossbeam-channel = "0.5"
+tokio = { version = "1.45", features = ["rt-multi-thread", "sync", "time"] }
+tokio-util = "0.7"
+image = { version = "0.25", default-features = false, features = ["png"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+log = "0.4"
+rfd = "0.17"
+dirs = "7"
