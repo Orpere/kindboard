@@ -293,7 +293,9 @@ fn kubectx() -> Tool {
             pacman: None,
             binary: Some(BinaryDownload {
                 url_template: "https://github.com/ahmetb/kubectx/releases/download/v0.11.0/kubectx_v0.11.0_{os}_{x64}.tar.gz",
-                members: &["kubectx", "kubens"],
+                // The kubectx archive contains only the kubectx binary; kubens
+                // ships in a separate upstream archive and is not installed.
+                members: &["kubectx"],
                 // Official digests: GitHub release asset checksums.txt (kubectx v0.11.0).
                 sha256: &[
                     (

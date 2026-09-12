@@ -113,7 +113,7 @@ pub enum ToolId {
     Cilium,
     /// k9s.
     K9s,
-    /// kubectx (+ kubens).
+    /// kubectx (kubens ships in a separate upstream archive; not installed).
     Kubectx,
     /// kustomize.
     Kustomize,
@@ -997,8 +997,17 @@ async fn verify_download_file(
 /// Install a tool on the current platform (convenience wrapper; events are
 /// discarded).
 pub async fn install(id: ToolId) -> Result<ToolStatus> {
-    let (tx, _rx) = mpsc::channel(1);
-    install_with_progress(id, None, &tx).await
+    /// Event buffer for the drain task below. Capacity is not load-bearing —
+    /// the drain consumes events, so sends never block regardless.
+    const DRAIN_BUFFER: usize = 8;
+    let (tx, mut rx) = mpsc::channel(DRAIN_BUFFER);
+    // Drain events on a background task so event sends never block (the
+    // receiver is deliberately unused by this convenience wrapper).
+    let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
+    let result = install_with_progress(id, None, &tx).await;
+    drop(tx); // close the channel so the drain task can exit
+    let _ = drain.await;
+    result
 }
 
 #[cfg(test)]
@@ -1489,7 +1498,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_kubectx_extracts_both_scripts() {
+    fn plan_kubectx_extracts_single_binary() {
         let plan = plan_install_for(
             ToolId::Kubectx,
             &linux_none(),
@@ -1497,25 +1506,16 @@ mod tests {
         )
         .unwrap();
         let tar = plan.steps.iter().find(|s| s.program == "tar").unwrap();
-        assert_eq!(tar.args.len(), 6);
-        assert!(tar.args[4].contains("kubectx"));
-        assert!(tar.args[5].contains("kubens"));
+        // -xzf <archive> -C <dir> kubectx (kubens ships in its own archive).
+        assert_eq!(tar.args.len(), 5);
+        assert_eq!(tar.args[4], "kubectx");
         let mv_names: Vec<String> = plan
             .steps
             .iter()
             .filter(|s| s.program == "mv")
             .map(|s| s.args[1].clone())
             .collect();
-        assert!(
-            mv_names
-                .iter()
-                .any(|p| p.ends_with("/kubectx") && p.contains("/kubectx")),
-            "{mv_names:?}"
-        );
-        assert!(
-            mv_names.iter().any(|p| p.ends_with("/kubens")),
-            "{mv_names:?}"
-        );
+        assert_eq!(mv_names, vec!["/home/u/.local/bin/kubectx"], "{mv_names:?}");
     }
 
     #[test]

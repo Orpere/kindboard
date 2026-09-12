@@ -88,11 +88,12 @@ All four platform variants (linux/darwin × amd64/arm64) are pinned. A digest mi
 - **apt:** not in default repos → binary (or the `.deb` release asset).
 - **Binary:** `https://github.com/derailed/k9s/releases/download/v0.51.0/k9s_{Linux,Darwin}_{amd64,arm64}.tar.gz` (extract `k9s`); `.deb`/`.rpm`/`.apk` assets also published.
 
-### kubectx (+ kubens)
+### kubectx
 
-- **Detect:** `kubectx --version` (v0.9.5+); both `kubectx` and `kubens` ship together.
+- **Detect:** `kubectx --version` → `0.11.0`.
 - **brew:** `brew install kubectx`. **dnf/apt/pacman:** not in default repos (AUR `kubectx`) → binary.
-- **Binary:** `https://github.com/ahmetb/kubectx/releases/download/v0.11.0/kubectx_v0.11.0_{linux,darwin}_{x86_64,arm64}.tar.gz` — these are **shell scripts**, not compiled binaries; install by copying `kubectx`/`kubens` to `~/.local/bin` and `chmod +x`.
+- **Binary:** `https://github.com/ahmetb/kubectx/releases/download/v0.11.0/kubectx_v0.11.0_{linux,darwin}_{x86_64,arm64}.tar.gz` — a compiled Go binary (since v0.10.0); kindboard extracts `kubectx` to `~/.local/bin` and `chmod +x`.
+- **kubens:** ships in a separate upstream archive (`kubens_v0.11.0_*.tar.gz`) and is **not** installed by kindboard; available via `brew install kubectx` if needed.
 
 ### kustomize
 
