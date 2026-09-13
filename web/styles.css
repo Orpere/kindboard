@@ -201,7 +201,7 @@ html[data-theme="light"] #theme-moon { display: block; }
 .comp-card { display: flex; flex-direction: column; }
 .comp-name { font-family: var(--mono); font-size: 1.02rem; color: var(--accent); margin: 0 0 8px; letter-spacing: 0.01em; }
 .comp-card p { margin: 0 0 12px; }
-.comp-link { margin-top: auto; font-size: 0.86rem; font-weight: 600; color: var(--link); }
+.comp-link { margin-top: auto; font-family: var(--mono); font-size: 0.78rem; font-weight: 600; color: var(--link); overflow-wrap: anywhere; }
 .comp-link:hover { text-decoration: underline; }
 
 /* ---------- architecture ---------- */
@@ -312,6 +312,8 @@ html[data-theme="light"] #theme-moon { display: block; }
 .site-footer nav { display: flex; gap: 16px; flex-wrap: wrap; }
 .site-footer nav a { color: #9aa6b4; font-size: 0.85rem; }
 .site-footer nav a:hover { color: #3da5d9; }
+.footer-refs { flex: 1 1 100%; border-top: 1px solid #2c3642; padding-top: 14px; }
+.footer-refs a { font-family: var(--mono); font-size: 0.78rem; }
 
 /* ---------- lightbox ---------- */
 .lightbox {
