@@ -30,5 +30,8 @@ Static, self-contained presentation site for kindboard.
 | `index.html` | Single-page site (hero, features, architecture, screenshots, themes, CNI matrix, getting started, roadmap) |
 | `styles.css` | Brand-matched design system (teal-blue accent, dark hero, light content sections) |
 | `app.js` | Vanilla JS: mobile nav, scroll-spy, image lightbox |
-| `favicon.svg` | Brand mark |
-| `assets/img/*.png` | Real app screenshots (dark/light themes) |
+| `favicon.svg` / `favicon-192.png` / `apple-touch-icon.png` | O.R.P mark in browser-tab and touch sizes |
+| `assets/img/orp-mark.svg` | O.R.P mark only (transparent — used in the header next to the HTML wordmark) |
+| `assets/img/logo-orp.svg` | O.R.P full lockup (transparent background, light text for dark surfaces — used in the footer) |
+| `assets/img/screenshot-*.png` | Real app captures: overview ×3 themes, cluster ×2 themes, wizard |
+| `og-image.png` | Social-share image (O.R.P mark) |

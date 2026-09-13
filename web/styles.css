@@ -56,9 +56,12 @@ a:hover { text-decoration: underline; }
   color: var(--text-dark);
 }
 .header-inner { display: flex; align-items: center; gap: 22px; min-height: 64px; }
-.brand { display: flex; align-items: center; gap: 10px; color: var(--text-dark); font-weight: 700; font-size: 1.15rem; }
+.brand { display: flex; align-items: center; gap: 12px; color: var(--text-dark); font-weight: 700; font-size: 1.15rem; }
 .brand:hover { text-decoration: none; }
-.brand-mark { width: 28px; height: 28px; }
+.brand-mark { height: 40px; width: auto; }
+.brand-text { display: flex; flex-direction: column; line-height: 1.15; }
+.brand-text strong { font-size: 1.05rem; letter-spacing: 0.06em; color: var(--text-dark); }
+.brand-text small { font-size: 0.7rem; font-weight: 500; color: var(--accent); letter-spacing: 0.02em; }
 .brand-version { font-size: 0.72rem; color: var(--text-dark-dim); font-weight: 500; border: 1px solid var(--stroke-dark); border-radius: 999px; padding: 1px 8px; }
 .site-nav { display: flex; gap: 18px; margin-left: auto; }
 .site-nav a { color: var(--text-dark-dim); font-size: 0.92rem; }
@@ -235,6 +238,8 @@ a:hover { text-decoration: underline; }
 /* ---------- footer ---------- */
 .site-footer { background: var(--bg-deeper); color: var(--text-dark); border-top: 1px solid var(--stroke-dark); padding: 34px 0; }
 .footer-inner { display: flex; gap: 20px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+.footer-brand-box { max-width: 340px; }
+.footer-logo { height: 64px; width: auto; margin-bottom: 10px; }
 .footer-brand { font-weight: 700; margin: 0 0 4px; }
 .site-footer p { margin: 0; font-size: 0.85rem; }
 .site-footer nav { display: flex; gap: 16px; flex-wrap: wrap; }

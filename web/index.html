@@ -6,26 +6,27 @@
   <title>kindboard — a desktop cockpit for kind clusters</title>
   <meta name="description" content="kindboard is a Linux desktop app for creating, inspecting and managing local Kubernetes (kind) clusters — built in Rust for people learning Kubernetes and DevOps." />
   <meta name="theme-color" content="#12161c" />
+  <meta name="author" content="Orlando Rosa Pereira" />
   <meta property="og:title" content="kindboard — a desktop cockpit for kind clusters" />
   <meta property="og:description" content="Create, inspect and manage local Kubernetes clusters from a polished desktop UI. Rust + egui, one-click dependencies, live topology diagrams, Cilium + Gateway API support." />
   <meta property="og:type" content="website" />
+  <meta property="og:image" content="og-image.png" />
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="icon" type="image/png" sizes="192x192" href="favicon-192.png" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
 
 <header class="site-header" id="top">
   <div class="wrap header-inner">
-    <a class="brand" href="#top" aria-label="kindboard home">
-      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
-        <rect x="3" y="3" width="11" height="11" rx="2.5" fill="#3da5d9"/>
-        <rect x="18" y="3" width="11" height="11" rx="2.5" fill="#3da5d9" opacity="0.55"/>
-        <rect x="3" y="18" width="11" height="11" rx="2.5" fill="#3da5d9" opacity="0.55"/>
-        <rect x="18" y="18" width="11" height="11" rx="2.5" fill="#3da5d9" opacity="0.85"/>
-        <path d="M8.5 8.5h15M8.5 23.5h15M8.5 8.5v15M23.5 8.5v15" stroke="#0a0d11" stroke-width="1.6"/>
-      </svg>
-      <span class="brand-name">kindboard</span>
-      <span class="brand-version">v0.1.2</span>
+    <a class="brand" href="#top" aria-label="O.R.P — Orlando Rosa Pereira, home">
+      <img class="brand-mark" src="assets/img/orp-mark.svg" alt="O.R.P mark" />
+      <span class="brand-text">
+        <strong>O.R.P</strong>
+        <small>Orlando Rosa Pereira</small>
+      </span>
+      <span class="brand-version">kindboard v0.1.2</span>
     </a>
     <button class="nav-toggle" id="nav-toggle" aria-expanded="false" aria-controls="site-nav" aria-label="Toggle navigation">
       <span></span><span></span><span></span>
@@ -50,7 +51,7 @@
   <section class="hero" id="hero">
     <div class="hero-grid" aria-hidden="true"></div>
     <div class="wrap hero-inner">
-      <p class="hero-kicker">Rust · egui · kind · Linux</p>
+      <p class="hero-kicker">A project by Orlando Rosa Pereira · Rust · egui · kind · Linux</p>
       <h1>Real Kubernetes clusters.<br /><span class="accent">A desktop cockpit</span> to run them.</h1>
       <p class="hero-sub">
         kindboard wraps <strong>kind</strong> — Kubernetes in Docker — in a polished desktop interface:
@@ -201,7 +202,7 @@
       <div class="shots-grid">
         <figure>
           <a href="assets/img/screenshot-overview-dark.png" class="shot" data-lightbox>
-            <img src="assets/img/screenshot-overview-dark.png" alt="kindboard overview dashboard in dark theme showing managed clusters, the dependency panel and a tools-ready summary" loading="lazy" />
+            <img src="assets/img/screenshot-overview-dark.png" alt="kindboard overview dashboard in dark theme showing two managed clusters with uniform cards, the dependency panel and a tools-ready summary" loading="lazy" />
           </a>
           <figcaption>Overview dashboard — dark theme</figcaption>
         </figure>
@@ -222,6 +223,18 @@
             <img src="assets/img/screenshot-overview-light.png" alt="the same overview dashboard rendered in the light theme" loading="lazy" />
           </a>
           <figcaption>Same dashboard — light theme</figcaption>
+        </figure>
+        <figure>
+          <a href="assets/img/screenshot-cluster-light.png" class="shot" data-lightbox>
+            <img src="assets/img/screenshot-cluster-light.png" alt="the cluster topology diagram rendered in the light theme" loading="lazy" />
+          </a>
+          <figcaption>Topology diagram — light theme</figcaption>
+        </figure>
+        <figure>
+          <a href="assets/img/screenshot-overview-high-contrast.png" class="shot" data-lightbox>
+            <img src="assets/img/screenshot-overview-high-contrast.png" alt="the overview dashboard in the high contrast theme with pure black surfaces" loading="lazy" />
+          </a>
+          <figcaption>High contrast theme</figcaption>
         </figure>
       </div>
     </div>
@@ -323,9 +336,10 @@ cargo build --release
 
 <footer class="site-footer">
   <div class="wrap footer-inner">
-    <div>
+    <div class="footer-brand-box">
+      <img class="footer-logo" src="assets/img/logo-orp.svg" alt="O.R.P logo — Orlando Rosa Pereira" />
       <p class="footer-brand">kindboard <span class="muted">v0.1.2</span></p>
-      <p class="muted">A study project for learning Kubernetes &amp; DevOps. Licensed under MIT.</p>
+      <p class="muted">A project by Orlando Rosa Pereira — for everyone learning Kubernetes &amp; DevOps. Licensed under MIT.</p>
     </div>
     <nav aria-label="Footer navigation">
       <a href="#features">Features</a>

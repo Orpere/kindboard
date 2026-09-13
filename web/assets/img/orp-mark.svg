@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 220" width="220" height="220" role="img" aria-label="O.R.P mark">
+  <!-- O.R.P mark: three cluster nodes wired as a mesh — transparent background -->
+  <path d="M94 50 L198 56 M94 76 L198 72 M70 104 L196 70" stroke="#3da5d9" stroke-width="6" stroke-linecap="round" fill="none" opacity="0.55"/>
+  <rect x="16" y="16" width="84" height="84" rx="17" fill="#3da5d9"/>
+  <text x="58" y="74" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="52" font-weight="700" fill="#0a0d11">R</text>
+  <rect x="16" y="108" width="84" height="84" rx="17" fill="#3da5d9" opacity="0.72"/>
+  <text x="58" y="166" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="52" font-weight="700" fill="#0a0d11">O</text>
+  <rect x="112" y="62" width="84" height="84" rx="17" fill="#2a769d"/>
+  <text x="154" y="120" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="52" font-weight="700" fill="#0a0d11">P</text>
+</svg>
