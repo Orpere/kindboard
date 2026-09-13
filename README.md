@@ -24,7 +24,8 @@ Cilium** ingress, Hubble observability, the Gateway API, and cluster mesh.
 stops. Beyond the default kindnet CNI, nothing is wired for you:
 
 - kind ships no **CNI** beyond kindnet (flannel, calico and Cilium need their
-  own install + pod-CIDR wiring, and Cilium 1.20+ is picky about its values).
+  own install + pod-CIDR wiring — kindboard handles Cilium's kernel-7.2
+  incompatibility and its strict values for you).
 - It ships no **ingress controller** (nginx/traefik/Cilium all need manifests,
   helm repos, or `--set` flags you have to look up).
 - It gives you **no observability** — no topology view, no log tailing, no
@@ -44,7 +45,13 @@ style, and persisting everything crash-safely.
   feature gates, extra port mappings, worker count.
 - **Cilium extras as checkboxes** — Gateway API, Hubble (relay + UI), Ingress
   Controller and Mesh (clustermesh); enabling Mesh opens a per-cluster ID form
-  (cluster-id + cluster-name).
+  (cluster-id + cluster-name). Cilium replaces kube-proxy
+  (`kubeProxyReplacement=true`), which its Gateway API controller requires.
+- **Kernel-aware Cilium** — on Docker kernels ≥ 7.2, kindboard automatically
+  installs the first Cilium release with the `bpf_set_retval` fix
+  (v1.21.0-pre.2) instead of the broken stable; one `cilium install` carries
+  all extras (Gateway API v1.6.2 CRDs applied first), so there are no
+  post-install release upgrades (ADR-0014, ADR-0015).
 - **Ingress controller of your choice** — nginx, traefik or cilium, with
   automatic host-port mapping (80/443).
 - **A dependency manager built in** — detects and installs docker, kind,
@@ -95,7 +102,8 @@ make build      # full gates + release artifacts in dist/ + SHA256SUMS
 
 1. Open the **Overview** tab → **Create cluster**.
 2. Name it, pick a Kubernetes version, and choose a CNI — flannel, calico,
-   or cilium (with its extras):
+   or cilium (with its extras; kindboard picks the kernel-compatible Cilium
+   version automatically):
 
    ![Create wizard — CNI selector](docs/howtos/screenshots/05-wizard-cni.png)
 
@@ -188,7 +196,7 @@ between every module).
 | [docs/dependency-install-matrix.md](docs/dependency-install-matrix.md) | Detection commands, package names, pinned binary downloads per tool |
 | [docs/howtos/install-kubectx.md](docs/howtos/install-kubectx.md) | **How-to with screenshots:** install kubectx from the Dependencies panel |
 | [docs/howtos/create-cni-clusters.md](docs/howtos/create-cni-clusters.md) | **How-to with screenshots:** flannel, calico and cilium clusters, end to end |
-| [docs/adrs/](docs/adrs/) | Architecture decision records (ADR-0008 … 0013) |
+| [docs/adrs/](docs/adrs/) | Architecture decision records (ADR-0008 … 0015) |
 | [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md) | Logo ownership, sources and trademark notes |
 
 ## License & attribution

@@ -36,7 +36,7 @@ it, verify nodes become Ready — with CNI-specific details:
 |---|---|
 | **flannel** | Downloads `kube-flannel.yml` (release v0.28.9, SHA-256 pinned) → `kubectl apply` → waits for nodes Ready. The pod CIDR is patched into `net-conf.json.Network` when it differs from flannel's default `10.244.0.0/16`. |
 | **calico** | Downloads the tigera operator manifest (v3.32.0, pinned) → `kubectl apply` → **waits for the operator's CRDs to become established** (the operator registers them at runtime; applying too early fails with "no matches for kind Installation") → applies the `Installation` custom resource (with your pod CIDR) → waits for nodes Ready. |
-| **cilium** | Runs `cilium install --set kubeProxyReplacement=false` (via the official cilium CLI; Cilium 1.20+ accepts only `true`/`false` — the old `disabled` keyword is rejected) → verifies with `cilium status --wait` → then applies the enabled extras: Gateway API CRDs + `gatewayAPI.enabled=true`, Hubble relay + UI, `ingressController.enabled=true` (on by default) and clustermesh. |
+| **cilium** | Renders the kind config with `networking.kubeProxyMode: none` (Cilium fully replaces kube-proxy), then, when Gateway API is enabled, downloads and applies the Gateway API **v1.6.2** CRDs → one `cilium install` carrying **all** values: `kubeProxyReplacement=true`, `ingressController.enabled=true` (on by default), `gatewayAPI.enabled=true` when selected, and for mesh `cluster.name`/`cluster.id` + `clustermesh.apiserver.service.type=NodePort`. It adds `--version v1.21.0-pre.2` when the Docker host kernel is ≥ 7.2 (§5). Then `cilium hubble enable --relay --ui` → `cilium clustermesh enable --service-type NodePort` → verifies with `cilium status --wait`. There are no post-install `cilium upgrade` steps. |
 
 Everything downloads over HTTPS with a pinned SHA-256; a digest mismatch
 aborts the step before anything is executed.
@@ -82,12 +82,17 @@ KINDBOARD_E2E=1 KINDBOARD_E2E_KEEP=1 cargo test -p kindboard-core --test e2e \
   e2e_cni_matrix_flannel_calico_cilium -- --nocapture
 ```
 
-Latest live runs (2026-09-13): flannel ✓ · calico ✓ · cilium — see below.
+Latest live runs (2026-09-13, kernel 7.2.4): flannel ✓ · calico ✓ · cilium ✓
+(full stack — Hubble UI, Gateway API with `GatewayClass Accepted=True`, ingress
+controller, clustermesh).
 
 ## 5. Known environment limitations
 
-**cilium on kernel 7.x** — on hosts running kernel 7.x (e.g. Fedora 44's
-7.2.4), the cilium agent crash-loops at startup with:
+**cilium on kernel ≥ 7.2 — handled automatically.** Linux 7.2 added verifier
+validation for the `bpf_set_retval` helper (kernel commit `b1f7f67b74c2e`).
+Cilium's startup probe emits a bare `call bpf_set_retval` and treats the
+verifier rejection as fatal, so **stable releases up to v1.20.1** crash-loop
+the agent:
 
 ```
 level=fatal msg="failed to probe helper" ... error="detect support for
@@ -96,16 +101,39 @@ FnSetRetval for program type CGroupSock: load program: invalid argument:
 helper=FnSetRetval
 ```
 
-Kernel 7.x changed the `bpf_set_retval` BPF helper signature; cilium
-1.20.1 and 1.21.0-pre.0 (current at the time of writing) still probe the
-old form and refuse to start. This is an **upstream cilium ↔ kernel**
-incompatibility, not a kindboard bug — kindboard's provisioning itself is
-verified up to this point (kind-create ✓, `kubeProxyReplacement=false`
-accepted ✓; the agent is the first thing that fails). If you hit it:
+Upstream fixed this in commit `67c619cb` (issue cilium#48016); the first
+release containing the fix is **v1.21.0-pre.2** (2026-09-09) — no stable
+release has it as of 2026-09-13.
 
+**kindboard handles this for you ([ADR-0014](../adrs/ADR-0014.md)).** Before building the plan,
+kindboard probes the kernel the cluster's nodes run on
+(`docker info --format '{{.KernelVersion}}'` — on macOS that is the Docker
+Desktop VM kernel) and, for kernel ≥ 7.2, passes `--version v1.21.0-pre.2` to
+the single cilium install. That install carries every value at once
+(`kubeProxyReplacement=true`, ingress, Gateway API, clustermesh), so
+post-install `cilium upgrade` steps no longer exist
+([ADR-0015](../adrs/ADR-0015.md)) — which also removes the CLI's "release
+name ... still in use" failure mode. Verified live on kernel 7.2.4: the full cilium
+stack (Hubble UI, Gateway API, ingress controller, clustermesh) comes up,
+`GatewayClass Accepted=True`, DNS resolves, and `cilium status` exits 0.
+
+**Gateway API on kind — the controller works, the LoadBalancer does not
+exist.** Cilium's Gateway API controller is fully functional (a `GatewayClass`
+becomes `Accepted=True` and `HTTPRoute`s reconcile), but kind has no cloud
+LoadBalancer: the service a user-created `Gateway` provisions stays
+`EXTERNAL-IP: <pending>` until it is configured for NodePort or hostNetwork
+(e.g. via a `CiliumGatewayClassConfig`). That is a kind/host limitation, not a
+kindboard provisioning failure.
+
+If the crash-loop diagnosis still fires, the automatic version selection did
+not apply — check the kernel the agent sees and the fallbacks:
+
+- `docker info --format '{{.KernelVersion}}'` — confirm the host kernel;
 - boot an older kernel from the boot menu if one is installed (e.g.
-  `6.19.10-300.fc44`), or
-- skip the cilium leg on affected hosts: `KINDBOARD_E2E_SKIP_CILIUM=1`.
+  `6.19.10-300.fc44`), then re-create the cluster, or
+- choose the **flannel** or **calico** CNI instead, or
+- skip the cilium leg in automated runs on affected hosts:
+  `KINDBOARD_E2E_SKIP_CILIUM=1`.
 
 ## Cleanup
 

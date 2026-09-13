@@ -6,10 +6,11 @@
 //!
 //! Every downloaded manifest is pinned to an immutable release tag **and**
 //! carries a SHA-256 digest constant checked at install time. Manifest
-//! digests are best-effort pinning: the upstream projects publish no
+//! digests are best-effort pinning: most upstream projects publish no
 //! checksums for these YAML files, so the digest records the exact content
-//! at the pinned tag (raw.githubusercontent.com serves tag-immutable
-//! content over HTTPS).
+//! at the pinned tag. The SHA-256 pin is the integrity guarantee for both
+//! tag-immutable raw.githubusercontent.com files and GitHub release assets
+//! (whose URLs are not content-addressed).
 
 /// Flannel CNI manifest (`kube-flannel.yml`), pinned to release v0.28.9
 /// (latest release, 2026-09-12). Pod CIDR is patched into
@@ -41,15 +42,18 @@ pub const INGRESS_NGINX_KIND_DEPLOY_URL: &str = "https://raw.githubusercontent.c
 pub const INGRESS_NGINX_KIND_DEPLOY_SHA256: &str =
     "cb84b0ea747c9149cce08aef4e95b1e55f183f07299f40e7009043e960a0133f";
 
-/// Gateway API standard CRDs (server-side applied before enabling Cilium's
-/// Gateway API controller).
+/// Gateway API standard CRDs, server-side applied before the Cilium install
+/// so the operator discovers them at startup (it caches CRD discovery).
+/// Pinned to v1.6.2 because Cilium >= 1.21 requires Gateway API
+/// `tlsroutes`/`referencegrants` at v1; v1.4.0 only ships v1alpha3/v1beta1,
+/// so the operator's Gateway API controller fails CRD discovery.
 pub const GATEWAY_API_CRDS_URL: &str =
-    "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/standard-install.yaml";
+    "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/standard-install.yaml";
 
 /// SHA-256 of [`GATEWAY_API_CRDS_URL`] (best-effort pin, no upstream
 /// digest).
 pub const GATEWAY_API_CRDS_SHA256: &str =
-    "6a4029e661446d64add866a00ecdc40c14219b68777ab614c5cdaac0adb481f1";
+    "faede450fa178126aba41337737b97d351ebe87d93c910237ce1e072d1ca40d9";
 
 /// Traefik Helm chart repository.
 pub const TRAEFIK_HELM_REPO_URL: &str = "https://traefik.github.io/charts";
@@ -74,11 +78,13 @@ pub const NODE_READY_TIMEOUT: &str = "2m";
 /// before that fails with "no matches for kind Installation").
 pub const CALICO_CRD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
-/// Cilium helm value forcing kube-proxy replacement off for kind (kind
-/// manages its own kube-proxy). Cilium 1.20+ validates this strictly:
-/// only `true`/`false` are accepted (the old `disabled` keyword errors
-/// with "kubeProxyReplacement must be explicitly set to a valid value").
-pub const CILIUM_SET_KUBE_PROXY_DISABLED: &str = "kubeProxyReplacement=false";
+/// Cilium helm value enabling kube-proxy replacement for kind. kind renders
+/// `kubeProxyMode: none` for Cilium (no kube-proxy in the cluster), so Cilium
+/// must fully replace it; Cilium's Gateway API controller is disabled unless
+/// kube-proxy replacement is on. Cilium 1.20+ validates the value strictly:
+/// only `true`/`false` are accepted (the old `disabled` keyword errors with
+/// "kubeProxyReplacement must be explicitly set to a valid value").
+pub const CILIUM_SET_KUBE_PROXY_REPLACEMENT: &str = "kubeProxyReplacement=true";
 
 /// Cilium helm value enabling the ingress controller.
 pub const CILIUM_SET_INGRESS_ENABLED: &str = "ingressController.enabled=true";
@@ -88,6 +94,20 @@ pub const CILIUM_SET_GATEWAY_API_ENABLED: &str = "gatewayAPI.enabled=true";
 
 /// Cilium clustermesh apiserver service type for kind (no LB).
 pub const CILIUM_SET_MESH_NODE_PORT: &str = "clustermesh.apiserver.service.type=NodePort";
+
+/// Cilium version required on Linux kernels >= 7.2, where the kernel's
+/// `bpf_set_retval` helper gained argument validation and the agent probe in
+/// stable releases crashes the agent at startup (upstream issue #48016:
+/// `call bpf_set_retval#187: R1 is not a scalar`). The fix commit 67c619c
+/// ("bpf: use bpf_core_enum_value_exists() for HAVE_SET_RETVAL") is contained
+/// in no stable release as of 2026-09-13; the first release with it is the
+/// pre-release `v1.21.0-pre.2`. Bump this constant once a stable release
+/// contains the fix.
+pub const CILIUM_VERSION_KERNEL_72: &str = "v1.21.0-pre.2";
+
+/// Cilium clustermesh apiserver service type for kind (kind has no
+/// LoadBalancer; the cilium CLI cannot auto-detect one).
+pub const CILIUM_MESH_SERVICE_TYPE: &str = "NodePort";
 
 /// Render the Calico `Installation` custom resource with the pod CIDR baked
 /// in (contracts §4: operator path, `ipPools[0].cidr = pod_cidr`).

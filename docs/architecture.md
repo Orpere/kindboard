@@ -1,7 +1,7 @@
 # kindboard — Architecture
 
 > Design record for `kindboard-core` + `kindboard-app`. Companion documents:
-> `docs/contracts.md` (typed seams), `docs/adrs/ADR-0008…0013` (decisions),
+> `docs/contracts.md` (typed seams), `docs/adrs/ADR-0008…0015` (decisions),
 > `docs/dependency-install-matrix.md` (tool installs).
 >
 > All flag names, field names, and URLs below were verified against official
@@ -24,10 +24,12 @@ architecture is the answer to five constraints, in priority order:
    No shell interpolation (ADR-0009): every invocation is an args array, so
    there is no quoting-injection class of bug.
 3. **The real world wins over assumptions.** kind has no node add/remove
-   commands, so scaling is an explicit guided recreate (ADR-0002). Cilium
-   1.20+ rejects the old `disabled` keyword, so the value is `false`
-   ([§9](#9-live-e2e-verification-2026-09-13)). Facts are verified against the
-   tools themselves and recorded ([§8](#8-verification-log-2026-09-12)).
+   commands, so scaling is an explicit guided recreate (ADR-0002). Cilium's
+   Gateway API controller requires kube-proxy replacement, so Cilium clusters
+   render kind `networking.kubeProxyMode: none` and install with
+   `kubeProxyReplacement=true` ([§9](#9-live-e2e-verification-2026-09-13),
+   ADR-0015). Facts are verified against the tools themselves and recorded
+   ([§8](#8-verification-log-2026-09-12)).
 4. **Fail loud, fail typed.** Every failure is a typed error
    ([§5](#5-error-taxonomy-thiserror)); cancellation, timeouts, and drift are
    first-class conditions, never silent swallows.
@@ -130,7 +132,7 @@ The tokio runtime is *owned by core* ([§4](#4-async-model)).
 | `spec` | `ClusterSpec` + CNI/ingress/cilium enums; validation; (de)serialization; spec→kind-config generation | `ClusterSpec`, `Cni`, `IngressController`, `CiliumOptions`, `KindConfig` |
 | `exec` | `tokio::process` wrapper: args-only spawn, cancellation, streaming stdout/stderr, timeouts, env (ADR-0009) | `Cmd`, `CmdOutput`, `ProcessHandle` |
 | `kindctl` | Every kind/docker/kubectl/helm/cilium invocation as a typed enum; list/adopt clusters; version detection | `KindCommand` |
-| `provision` | Create/destroy flow, CNI/ingress/cilium post-install, scale=recreate (ADR-0002), provisioning order matrix | `CreatePlan`, `ProvisionStep` |
+| `provision` | Create/destroy flow, CNI/ingress/cilium install, scale=recreate (ADR-0002), provisioning order matrix, kernel-aware Cilium version selection (ADR-0014), kube-proxy replacement + Gateway API CRD ordering (ADR-0015) | `CreatePlan`, `ProvisionStep` |
 | `kubeconfig` | Merge/remove contexts via `kube::config::Kubeconfig` + atomic write + `.bak`; adopt-verification (ADR-0007) | `KubeconfigStore` |
 | `deps` | Detect/install dependency tools; registry of recipes (ADR-0003) | `Tool`, `ToolStatus`, `InstallRecipe` |
 | `topology` | Poll/watch k8s API into a typed topology model; layered-DAG layout (ADR-0010/0011) | `TopologyGraph`, `Workload`, `Pod`, … |
@@ -273,7 +275,7 @@ never mutates the stored spec until the new cluster is up.
 | Subprocess hang | per-call timeout | TERM → 5 s grace → KILL → `Error::Timeout` |
 | User cancels a create/recreate | `Command::Cancel` | cooperative cancel, same TERM→KILL ladder → `Error::Cancelled`; stored spec untouched |
 | `kind create` on existing cluster | `kind get clusters` pre-check | `Error::ClusterExists`, skip |
-| CNI/ingress install fails mid-flow | step verification fails | roll forward: re-run idempotent step (helm `upgrade --install`, `cilium install`); on repeated failure, surface `Error::Command` + offer "destroy cluster" |
+| CNI/ingress install fails mid-flow | step verification fails | roll forward: re-run the idempotent step (helm `upgrade --install`); the cilium flow is a single `cilium install` carrying all values — no post-install release upgrades (ADR-0015); on repeated failure, surface `Error::Command` + offer "destroy cluster" |
 | kubeconfig write interrupted | atomic write + `.bak` | previous file intact; repair on next start (ADR-0007) |
 | Cluster deleted outside app | reconciliation tick (`kind get clusters`) | classify `Missing`; offer recreate from spec, never auto-recreate (ADR-0011) |
 | Drift (worker count/version changed externally) | live props vs stored spec | `Error::Drift` surfaced; user-confirmed reconcile |
@@ -315,9 +317,9 @@ Runtime facts, produced by exercising real kind clusters — not mocked:
 
 - The CNI matrix e2e
   (`e2e_cni_matrix_flannel_calico_cilium`) ran live against real kind:
-  **flannel ✓** and **calico ✓** provisioned end to end (kind create →
-  kubeconfig merge → CNI install → readiness verification → kube-rs topology
-  read), clusters kept for inspection (`KINDBOARD_E2E_KEEP=1`).
+  **flannel ✓**, **calico ✓** and **cilium ✓** provisioned end to end (kind
+  create → kubeconfig merge → CNI install → readiness verification → kube-rs
+  topology read), clusters kept for inspection (`KINDBOARD_E2E_KEEP=1`).
 - Fixes found and verified live along the way:
   - **calico:** the tigera operator registers its CRDs at runtime — the
     `Installation` CR now waits for `installations.operator.tigera.io` to
@@ -325,27 +327,61 @@ Runtime facts, produced by exercising real kind clusters — not mocked:
   - **exec timeouts:** `kubectl wait` steps now carry a 180 s runner budget
     (their internal `--timeout=2m` used to outlive the runner's 60 s) and
     install-class commands (helm/cilium) 600 s.
-  - **cilium:** `kubeProxyReplacement` must be `false` for Cilium 1.20+ (the
-    `disabled` keyword is rejected).
+  - **cilium:** Cilium 1.20+ accepts only `true`/`false` for
+    `kubeProxyReplacement` (the old `disabled` keyword is rejected); since
+    round 2 the value is `true` with kind's kube-proxy disabled (ADR-0015).
 - **Regression note (v0.1.0 → v0.1.1):** the initial release binary shipped
   `--set kubeProxyReplacement=disabled`, which Cilium 1.20's chart rejects
   with *"kubeProxyReplacement must be explicitly set to a valid value (true
   or false)"* — reproduced live on 2026-09-13 (`cilium install` fails at the
-  configmap render before any agent starts). The fix changed the constant to
-  `kubeProxyReplacement=false` (commit 48fd524) and the release tarball was
-  rebuilt as v0.1.1; re-download or rebuild from `main` if `--version`
-  prints 0.1.0. Verified live: `cilium install --context kind-<name> --set
-  kubeProxyReplacement=false` renders the configmap
-  (`kube-proxy-replacement: false`), deploys the release and starts the
-  operator.
-- **cilium agent cannot start on this host's kernel 7.2.4:** its startup BPF
-  probe fails with `call bpf_set_retval#187: R1 is not a scalar` (kernel 7.x
-  changed the helper signature; reproducible on cilium 1.20.1 and
-  1.21.0-pre.0). This is an upstream cilium↔kernel incompatibility, not a
-  kindboard bug — kindboard's provisioning up to that point is verified
-  (kind-create ✓, helm values accepted ✓). The e2e supports
-  `KINDBOARD_E2E_SKIP_CILIUM=1` for affected hosts; boot kernel 6.19.10
-  (installed) to run cilium clusters.
+  configmap render before any agent starts). The fix landed in commit 48fd524
+  and the release tarball was rebuilt as v0.1.1; re-download or rebuild from
+  `main` if `--version` prints 0.1.0. Round 2 (ADR-0015) then moved the value
+  to `true` alongside kind's `kubeProxyMode: none` — that is the current
+  configuration.
+- **cilium on kernel ≥ 7.2 now provisions green (ADR-0014):** kernel 7.2
+  rejects cilium's unconditional `bpf_set_retval` helper probe (`call
+  bpf_set_retval#187: R1 is not a scalar`; upstream issue cilium#48016), and
+  every stable release as of 2026-09-13 (v1.18.13/v1.19.7/v1.20.1, all
+  published 2026-08-18) predates the fix. kindboard probes the Docker host
+  kernel (`docker info --format '{{.KernelVersion}}'`) and, for
+  `(major, minor) >= (7, 2)`, passes `--version v1.21.0-pre.2` — the first
+  release containing fix commit `67c619cb` — to the single cilium install.
+  Live on kernel 7.2.4: Cilium/Operator/Envoy OK, Hubble relay+UI Running,
+  Gateway API and ingress controller enabled, clustermesh-apiserver 3/3
+  Running, `cilium status` exit 0.
+- **Cilium is installed once with all values (ADR-0015):** Cilium's operator
+  reads its config and discovers the Gateway API CRDs once at startup; a
+  post-install `cilium upgrade` updates the configmap but does not roll the
+  operator. The plan therefore applies the Gateway API **v1.6.2** CRDs before
+  the single `cilium install`, which carries `kubeProxyReplacement=true`,
+  ingress, Gateway API and clustermesh values. Cilium's Gateway API controller
+  is disabled unless kube-proxy replacement is on
+  (`operator/pkg/gateway-api/cell.go`); the previous pin (Gateway API v1.4.0)
+  also shipped `tlsroutes`/`referencegrants` only at v1alpha3/v1beta1, while
+  Cilium ≥ 1.21's operator requires both at v1. Verified live: operator starts
+  with `enable-gateway-api=true` / `kube-proxy-replacement=true`;
+  `GatewayClass` `Accepted=True`; a test `HTTPRoute` `Accepted=True`; DNS
+  (`nslookup kubernetes.default`) resolves; `cilium status` OK for
+  Cilium/Operator/Envoy/Hubble/ClusterMesh. No post-install release upgrades
+  remain, so the `release name check failed: cannot reuse a name that is
+  still in use` failure mode is gone.
+- **Kind has no cloud LoadBalancer:** the Gateway API controller is fully
+  functional, but a user-created `Gateway`'s service stays
+  `EXTERNAL-IP: <pending>` until NodePort/hostNetwork or a
+  `CiliumGatewayClassConfig` is configured — a documented kind caveat, not a
+  provisioning failure.
+- **Clustermesh on kind passes `--service-type NodePort`:** the CLI cannot
+  auto-detect a service type on kind (`cannot auto-detect service type, please
+  specify using '--service-type' option`); the flag matches the Helm value
+  `clustermesh.apiserver.service.type=NodePort` the plan already sets.
+- **Diagnosis retained as fallback:** if a cilium step still fails, kindboard
+  inspects the agent pods (`kubectl get pods -l k8s-app=cilium` + `kubectl
+  logs --tail=200`) and, on the `failed to probe helper` +
+  `FnSetRetval`/`bpf_set_retval` signature, appends remedies — check `docker
+  info --format '{{.KernelVersion}}'`, boot an older kernel, or use
+  flannel/calico. The e2e keeps `KINDBOARD_E2E_SKIP_CILIUM=1` as an escape
+  hatch for hosts where cilium cannot run.
 - **Host requirement:** kind nodes consume inotify instances —
   `fs.inotify.max_user_instances=1024` and
   `fs.inotify.max_user_watches=524288` are set persistently in

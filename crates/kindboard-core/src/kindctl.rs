@@ -78,6 +78,10 @@ pub enum KindCommand {
     // ---- docker (node/log inspection) ----
     /// `docker version --format {{.Client.Version}}`
     DockerVersion,
+    /// `docker info --format {{.KernelVersion}}` — the kernel of the Docker
+    /// host (on Linux the host kernel, on macOS the Docker Desktop VM
+    /// kernel), i.e. the kernel kind nodes and the Cilium agent run on.
+    DockerKernelVersion,
     /// `docker ps --filter name=<name>- --format json`
     DockerPs {
         /// Cluster-name prefix filter (`name=<name>-`).
@@ -164,6 +168,17 @@ pub enum KindCommand {
         context: String,
         /// CRD name (e.g. `installations.operator.tigera.io`).
         name: String,
+    },
+    /// `kubectl --context <c> get pods -n <ns> -l <label> -o json`.
+    /// Used by the provision runner to diagnose failed CNI installs
+    /// (e.g. crash-looping Cilium agent pods).
+    KubectlGetPodsByLabel {
+        /// Kubeconfig context.
+        context: String,
+        /// Namespace (empty = all namespaces).
+        ns: String,
+        /// Label selector (e.g. `k8s-app=cilium`).
+        label: String,
     },
 
     // ---- helm (ingress + generic chart install) ----
@@ -264,10 +279,12 @@ pub enum KindCommand {
         /// Also install the Hubble relay (default on upstream).
         relay: bool,
     },
-    /// `cilium clustermesh enable [--context <c>]`
+    /// `cilium clustermesh enable [--context <c>] [--service-type <t>]`
     CiliumClustermeshEnable {
         /// Kubeconfig context.
         context: String,
+        /// `--service-type` (kind has no LoadBalancer; use `NodePort`).
+        service_type: Option<String>,
     },
     /// `cilium clustermesh connect --context <c>
     /// --destination-context <dst>`
@@ -379,6 +396,15 @@ impl KindCommand {
                     "version".into(),
                     "--format".into(),
                     "{{.Client.Version}}".into(),
+                ],
+                PROBE_TIMEOUT,
+            ),
+            KindCommand::DockerKernelVersion => (
+                "docker",
+                vec![
+                    "info".into(),
+                    "--format".into(),
+                    "{{.KernelVersion}}".into(),
                 ],
                 PROBE_TIMEOUT,
             ),
@@ -529,6 +555,23 @@ impl KindCommand {
                 ],
                 GENERAL_TIMEOUT,
             ),
+            KindCommand::KubectlGetPodsByLabel { context, ns, label } => {
+                let mut args = vec![
+                    "--context".to_string(),
+                    context.clone(),
+                    "get".to_string(),
+                    "pods".to_string(),
+                ];
+                if !ns.is_empty() {
+                    args.push("-n".to_string());
+                    args.push(ns.clone());
+                }
+                args.push("-l".to_string());
+                args.push(label.clone());
+                args.push("-o".to_string());
+                args.push("json".to_string());
+                ("kubectl", args, GENERAL_TIMEOUT)
+            }
             KindCommand::HelmVersion => (
                 "helm",
                 vec!["version".into(), "--short".into()],
@@ -662,16 +705,22 @@ impl KindCommand {
                 }
                 ("cilium", args, INSTALL_TIMEOUT)
             }
-            KindCommand::CiliumClustermeshEnable { context } => (
-                "cilium",
-                vec![
-                    "clustermesh".into(),
-                    "enable".into(),
-                    "--context".into(),
+            KindCommand::CiliumClustermeshEnable {
+                context,
+                service_type,
+            } => {
+                let mut args = vec![
+                    "clustermesh".to_string(),
+                    "enable".to_string(),
+                    "--context".to_string(),
                     context.clone(),
-                ],
-                INSTALL_TIMEOUT,
-            ),
+                ];
+                if let Some(service_type) = service_type {
+                    args.push("--service-type".to_string());
+                    args.push(service_type.clone());
+                }
+                ("cilium", args, INSTALL_TIMEOUT)
+            }
             KindCommand::CiliumClustermeshConnect {
                 context,
                 destination_context,
@@ -878,6 +927,10 @@ mod tests {
         assert_eq!(prog, "docker");
         assert_eq!(args, vec!["version", "--format", "{{.Client.Version}}"]);
 
+        let (prog, args) = KindCommand::DockerKernelVersion.to_program_and_args();
+        assert_eq!(prog, "docker");
+        assert_eq!(args, vec!["info", "--format", "{{.KernelVersion}}"]);
+
         let (_, args) = KindCommand::DockerPs {
             name_filter: "demo".into(),
         }
@@ -1045,6 +1098,52 @@ mod tests {
     }
 
     #[test]
+    fn kubectl_get_pods_by_label_args() {
+        let (prog, args) = KindCommand::KubectlGetPodsByLabel {
+            context: "kind-demo".into(),
+            ns: "kube-system".into(),
+            label: "app=x".into(),
+        }
+        .to_program_and_args();
+        assert_eq!(prog, "kubectl");
+        assert_eq!(
+            args,
+            vec![
+                "--context",
+                "kind-demo",
+                "get",
+                "pods",
+                "-n",
+                "kube-system",
+                "-l",
+                "app=x",
+                "-o",
+                "json"
+            ]
+        );
+
+        let (_, args) = KindCommand::KubectlGetPodsByLabel {
+            context: "kind-demo".into(),
+            ns: String::new(),
+            label: "app=x".into(),
+        }
+        .to_program_and_args();
+        assert_eq!(
+            args,
+            vec![
+                "--context",
+                "kind-demo",
+                "get",
+                "pods",
+                "-l",
+                "app=x",
+                "-o",
+                "json"
+            ]
+        );
+    }
+
+    #[test]
     fn helm_args() {
         let (prog, args) = KindCommand::HelmVersion.to_program_and_args();
         assert_eq!(prog, "helm");
@@ -1190,6 +1289,24 @@ mod tests {
 
         let (_, args) = KindCommand::CiliumClustermeshEnable {
             context: "kind-demo".into(),
+            service_type: Some("NodePort".into()),
+        }
+        .to_program_and_args();
+        assert_eq!(
+            args,
+            vec![
+                "clustermesh",
+                "enable",
+                "--context",
+                "kind-demo",
+                "--service-type",
+                "NodePort"
+            ]
+        );
+
+        let (_, args) = KindCommand::CiliumClustermeshEnable {
+            context: "kind-demo".into(),
+            service_type: None,
         }
         .to_program_and_args();
         assert_eq!(

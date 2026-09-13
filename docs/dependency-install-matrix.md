@@ -26,7 +26,7 @@ Every binary fallback download is verified against a **pinned SHA-256 digest** b
 | kubectx | GitHub release asset `checksums.txt` |
 | kustomize | GitHub release asset `checksums.txt` |
 
-All four platform variants (linux/darwin × amd64/arm64) are pinned. A digest mismatch aborts the install step. Downloads are HTTPS-only (`curl --proto=https --proto-redir=https`) with a 256 MiB size cap; provisioned manifests (flannel v0.28.9, calico v3.32.0, ingress-nginx v1.12.1, gateway-api v1.4.0) are tag-pinned **and** digest-checked at 64 MiB caps.
+All four platform variants (linux/darwin × amd64/arm64) are pinned. A digest mismatch aborts the install step. Downloads are HTTPS-only (`curl --proto=https --proto-redir=https`) with a 256 MiB size cap; provisioned manifests (flannel v0.28.9, calico v3.32.0, ingress-nginx v1.12.1, gateway-api v1.6.2) are tag-pinned **and** digest-checked at 64 MiB caps.
 
 ## Summary table
 
@@ -88,6 +88,7 @@ All four platform variants (linux/darwin × amd64/arm64) are pinned. A digest mi
 
 - **Detect:** `cilium version --client`.
 - **Version scheme note:** the CLI versions independently (`v0.20.0` current) from Cilium itself (`1.20.1`). The install `--version` flag selects the *Cilium* version; the CLI's own version is separate. Do not conflate them.
+- **Cilium version selection:** kindboard normally omits `--version` (CLI default = latest stable), but on Docker-host kernels ≥ 7.2 it passes `--version v1.21.0-pre.2` — the first release with the kernel-7.2 `bpf_set_retval` fix (ADR-0014).
 - **brew:** `brew install cilium-cli`. **dnf/apt/pacman:** none official (AUR `cilium-cli`) → binary.
 - **Binary:** `https://github.com/cilium/cilium-cli/releases/download/v0.20.0/cilium-{linux,darwin}-{amd64,arm64}.tar.gz` (+ same `.sha256sum`); extract `cilium`. Latest stable tag resolvable from `https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt`.
 

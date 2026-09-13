@@ -10,7 +10,7 @@
 //! | kindnet-default | — | helm install / kind deploy.yaml |
 //! | flannel | apply kube-flannel.yml (pod CIDR patched if needed) | same |
 //! | calico | tigera-operator + Installation CR (cidr=pod_cidr) | same |
-//! | cilium | `cilium install --set ...` (+ hubble/gateway/ingress/mesh) | cilium ingress controller |
+//! | cilium | Gateway API CRDs (if enabled) then one `cilium install --set ...` carrying ingress/gateway/mesh values, then hubble/mesh | cilium ingress controller |
 //!
 //! [`run_plan`] executes the plan sequentially (steps are already in
 //! dependency order; a failing step aborts the run), streaming
@@ -33,6 +33,10 @@ use crate::spec::{self, CiliumOptions, ClusterSpec, Cni, IngressController};
 
 /// Id of a provisioning step (stable across runs).
 pub type StepId = String;
+
+/// Id of the Cilium base-install step, shared by the plan builder and the
+/// post-failure diagnosis guard.
+const CILIUM_INSTALL_STEP: &str = "cni-cilium-install";
 
 /// One action a step performs.
 ///
@@ -210,15 +214,64 @@ pub enum ProvisionEvent {
     },
 }
 
+/// Cilium release to use for the given Docker host kernel version, or
+/// `None` to let the cilium CLI pick its default stable release.
+///
+/// Kernels >= 7.2 reject stable Cilium's `bpf_set_retval` startup probe
+/// (upstream issue #48016), so those hosts get
+/// [`manifests::CILIUM_VERSION_KERNEL_72`]. Input is the output of
+/// `docker info --format '{{.KernelVersion}}'` (e.g.
+/// `7.2.4-200.fc44.x86_64`); malformed or empty input yields `None`.
+pub fn cilium_version_for_kernel(kernel: &str) -> Option<&'static str> {
+    let mut parts = kernel.trim().split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = parts.next()?.parse().ok()?;
+    if (major, minor) >= (7, 2) {
+        Some(manifests::CILIUM_VERSION_KERNEL_72)
+    } else {
+        None
+    }
+}
+
+/// Detect the Cilium release to use by probing the Docker host kernel
+/// (`docker info --format {{.KernelVersion}}`) and applying
+/// [`cilium_version_for_kernel`].
+///
+/// Returns `None` when docker cannot be reached, the probe times out
+/// (bounded by the command's `PROBE_TIMEOUT`), or the kernel needs no
+/// override.
+pub async fn detect_cilium_version() -> Option<String> {
+    let output = KindCommand::DockerKernelVersion.to_cmd().run().await.ok()?;
+    cilium_version_for_kernel(output.stdout().trim()).map(str::to_owned)
+}
+
 /// Build the create plan for a spec (validating it first).
 ///
 /// `data_dir` is the state root (`~/.local/share/kindboard`); manifests and
 /// the rendered kind config go under its `tmp/` dir. `kubeconfig_path` is
 /// where the merged context is persisted.
+///
+/// Delegates to [`build_plan_with_cilium_version`] with `None`, i.e. the
+/// cilium CLI's default release; use the explicit version entry point when
+/// the Docker host kernel needs the >= 7.2 workaround.
 pub fn build_plan(
     spec: &ClusterSpec,
     data_dir: &Path,
     kubeconfig_path: &Path,
+) -> Result<CreatePlan> {
+    build_plan_with_cilium_version(spec, data_dir, kubeconfig_path, None)
+}
+
+/// Build the create plan for a spec (validating it first), pinning the
+/// Cilium release when `cilium_version` is set.
+///
+/// `cilium_version` overrides the cilium CLI default for every cilium
+/// command in the plan (the single install); `None` leaves the CLI default.
+pub fn build_plan_with_cilium_version(
+    spec: &ClusterSpec,
+    data_dir: &Path,
+    kubeconfig_path: &Path,
+    cilium_version: Option<&str>,
 ) -> Result<CreatePlan> {
     spec::validate(spec)?;
     // Cilium with no explicit options resolves to the defaults — which
@@ -271,7 +324,6 @@ pub fn build_plan(
 
     // 4. CNI chain (per matrix).
     let mut previous = merge_id;
-    let mut last_cni: Option<StepId> = None;
     match spec.cni {
         Cni::KindnetDefault => {}
         Cni::Flannel => {
@@ -320,7 +372,6 @@ pub fn build_plan(
                 VerifySpec::Command(nodes_ready(&context)),
             );
             previous = apply.clone();
-            last_cni = Some(apply);
         }
         Cni::Calico => {
             let operator_yaml = tmp.join(format!("tigera-operator-{}.yaml", spec.name));
@@ -384,10 +435,9 @@ pub fn build_plan(
                 VerifySpec::Command(nodes_ready(&context)),
             );
             previous = apply_cr.clone();
-            last_cni = Some(apply_cr);
         }
         Cni::Cilium => {
-            let mut sets = vec![manifests::CILIUM_SET_KUBE_PROXY_DISABLED.to_string()];
+            let mut sets = vec![manifests::CILIUM_SET_KUBE_PROXY_REPLACEMENT.to_string()];
             let mesh_sets: Vec<String> = match (&cilium, spec.cni) {
                 (Some(options), Cni::Cilium) if options.mesh => vec![
                     format!("cluster.name={}", options.cluster_name),
@@ -397,13 +447,51 @@ pub fn build_plan(
                 _ => Vec::new(),
             };
             sets.extend(mesh_sets);
+            if let Some(options) = &cilium {
+                if options.ingress {
+                    sets.push(manifests::CILIUM_SET_INGRESS_ENABLED.to_string());
+                }
+                if options.api_gateway {
+                    sets.push(manifests::CILIUM_SET_GATEWAY_API_ENABLED.to_string());
+                }
+            }
+            // The Cilium operator caches CRD discovery at startup, so the
+            // Gateway API CRDs must be applied before the base install; a
+            // post-install `cilium upgrade` would not restart the operator.
+            let install_dep = if cilium.as_ref().is_some_and(|options| options.api_gateway) {
+                let crds_path = tmp.join(format!("gateway-api-crds-{}.yaml", spec.name));
+                let download = step(
+                    &mut steps,
+                    "cilium-gateway-crds-download",
+                    &[&previous],
+                    ProvisionAction::Download {
+                        url: manifests::GATEWAY_API_CRDS_URL,
+                        dest: crds_path.clone(),
+                        expected_sha256: Some(manifests::GATEWAY_API_CRDS_SHA256),
+                    },
+                    VerifySpec::None,
+                );
+                step(
+                    &mut steps,
+                    "cilium-gateway-crds-apply",
+                    &[&download],
+                    ProvisionAction::Command(KindCommand::KubectlApply {
+                        context: context.clone(),
+                        manifest_path: crds_path,
+                        server_side: true,
+                    }),
+                    VerifySpec::None,
+                )
+            } else {
+                previous.clone()
+            };
             let install = step(
                 &mut steps,
-                "cni-cilium-install",
-                &[&previous],
+                CILIUM_INSTALL_STEP,
+                &[&install_dep],
                 ProvisionAction::Command(KindCommand::CiliumInstall {
                     context: context.clone(),
-                    version: None,
+                    version: cilium_version.map(str::to_owned),
                     sets,
                     wait: true,
                 }),
@@ -413,7 +501,6 @@ pub fn build_plan(
                 }),
             );
             previous = install.clone();
-            last_cni = Some(install);
 
             if let Some(options) = &cilium {
                 if options.hubble {
@@ -430,59 +517,6 @@ pub fn build_plan(
                     );
                     previous = hubble;
                 }
-                if options.ingress {
-                    let ingress = step(
-                        &mut steps,
-                        "cilium-ingress-enable",
-                        &[&previous],
-                        ProvisionAction::Command(KindCommand::CiliumInstall {
-                            context: context.clone(),
-                            version: None,
-                            sets: vec![manifests::CILIUM_SET_INGRESS_ENABLED.to_string()],
-                            wait: true,
-                        }),
-                        VerifySpec::None,
-                    );
-                    previous = ingress;
-                }
-                if options.api_gateway {
-                    let crds_path = tmp.join(format!("gateway-api-crds-{}.yaml", spec.name));
-                    let download = step(
-                        &mut steps,
-                        "cilium-gateway-crds-download",
-                        &[&previous],
-                        ProvisionAction::Download {
-                            url: manifests::GATEWAY_API_CRDS_URL,
-                            dest: crds_path.clone(),
-                            expected_sha256: Some(manifests::GATEWAY_API_CRDS_SHA256),
-                        },
-                        VerifySpec::None,
-                    );
-                    let apply_crds = step(
-                        &mut steps,
-                        "cilium-gateway-crds-apply",
-                        &[&download],
-                        ProvisionAction::Command(KindCommand::KubectlApply {
-                            context: context.clone(),
-                            manifest_path: crds_path,
-                            server_side: true,
-                        }),
-                        VerifySpec::None,
-                    );
-                    let enable = step(
-                        &mut steps,
-                        "cilium-gateway-enable",
-                        &[&apply_crds],
-                        ProvisionAction::Command(KindCommand::CiliumInstall {
-                            context: context.clone(),
-                            version: None,
-                            sets: vec![manifests::CILIUM_SET_GATEWAY_API_ENABLED.to_string()],
-                            wait: true,
-                        }),
-                        VerifySpec::None,
-                    );
-                    previous = enable;
-                }
                 if options.mesh {
                     let mesh = step(
                         &mut steps,
@@ -490,6 +524,7 @@ pub fn build_plan(
                         &[&previous],
                         ProvisionAction::Command(KindCommand::CiliumClustermeshEnable {
                             context: context.clone(),
+                            service_type: Some(manifests::CILIUM_MESH_SERVICE_TYPE.to_string()),
                         }),
                         VerifySpec::None,
                     );
@@ -585,7 +620,6 @@ pub fn build_plan(
         VerifySpec::None,
     );
 
-    let _ = last_cni;
     Ok(CreatePlan {
         steps,
         data_dir: data_dir.to_path_buf(),
@@ -664,7 +698,19 @@ pub async fn run_plan(
                     .await;
             }
             Err(err) => {
-                let message = err.to_string();
+                let mut message = err.to_string();
+                // The Cilium agent can crash-loop for an upstream kernel
+                // reason the install machinery cannot see; detect it and
+                // turn the opaque timeout into an actionable diagnosis.
+                if !cancel.as_ref().is_some_and(|t| t.is_cancelled())
+                    && step.id == CILIUM_INSTALL_STEP
+                    && let ProvisionAction::Command(KindCommand::CiliumInstall { context, .. }) =
+                        &step.command
+                    && let Some(diagnosis) = diagnose_cilium_failure(context).await
+                {
+                    message.push('\n');
+                    message.push_str(&diagnosis);
+                }
                 let _ = tx
                     .send(ProvisionEvent::StepFailed {
                         id: step.id.clone(),
@@ -686,6 +732,95 @@ pub async fn run_plan(
         .send(ProvisionEvent::PlanFinished { success: true })
         .await;
     Ok(())
+}
+
+/// Whether a Cilium agent log matches the known upstream failure where the
+/// agent cannot start because the host kernel's BPF helper ABI drifted.
+///
+/// Reproduced live on kernel 7.2.4-200.fc44 with Cilium v1.20.1 (and
+/// 1.21.0-pre.0) on 2026-09-13: `failed to probe helper` →
+/// `detect support for FnSetRetval ... call bpf_set_retval#187: R1 is not a
+/// scalar`. The probe is unconditional in Cilium's
+/// `pkg/datapath/linux/probes/probes.go` (common probes), so no helm value
+/// skips it; kindboard avoids it by pinning
+/// [`manifests::CILIUM_VERSION_KERNEL_72`] on kernels >= 7.2. This matcher
+/// backs the fallback diagnosis when that pin was not applied.
+pub fn is_agent_probe_failure(log: &str) -> bool {
+    log.contains("failed to probe helper")
+        && (log.contains("FnSetRetval") || log.contains("bpf_set_retval"))
+}
+
+/// Pod names from `kubectl get pods -o json` output (metadata.name of each
+/// item). Empty on unparseable input.
+fn pod_names_from_json(json: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let Some(items) = value.get("items").and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            item.get("metadata")
+                .and_then(|m| m.get("name"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+/// After a failed `cilium install`, inspect the Cilium agent pods and return
+/// an actionable diagnosis when they crash-loop on the known BPF probe
+/// failure. Bounded: one list call plus at most 3 bounded log calls, each
+/// with the standard GENERAL_TIMEOUT from the KindCommand surface.
+async fn diagnose_cilium_failure(context: &str) -> Option<String> {
+    let pods = KindCommand::KubectlGetPodsByLabel {
+        context: context.to_string(),
+        ns: "kube-system".to_string(),
+        label: "k8s-app=cilium".to_string(),
+    }
+    .to_cmd()
+    .run()
+    .await
+    .ok()?;
+    let mut names = pod_names_from_json(&pods.stdout());
+    if names.is_empty() {
+        return None;
+    }
+    names.truncate(3);
+    for pod in names {
+        let Ok(logs) = KindCommand::KubectlLogs {
+            context: context.to_string(),
+            pod: pod.clone(),
+            ns: "kube-system".to_string(),
+            container: None,
+            follow: false,
+            tail: Some(200),
+        }
+        .to_cmd()
+        .run()
+        .await
+        else {
+            continue;
+        };
+        if is_agent_probe_failure(&logs.stdout()) {
+            return Some(format!(
+                "diagnosis: Cilium agent pod {pod} cannot start on this host kernel \
+                 (BPF probe failure: FnSetRetval/bpf_set_retval) — the known upstream \
+                 incompatibility cilium#48016, fixed upstream in commit 67c619c and \
+                 first released in {ver} (no stable release as of 2026-09-13). \
+                 kindboard selects {ver} automatically on Docker host kernels >= 7.2, \
+                 so this host failed despite that override — the docker kernel probe \
+                 may have failed or kindboard is outdated. Remedies: check \
+                 `docker info --format '{{{{.KernelVersion}}}}'` and update kindboard, \
+                 boot a kernel < 7.2 and re-create the cluster, or use the \
+                 flannel/calico CNI.",
+                ver = manifests::CILIUM_VERSION_KERNEL_72
+            ));
+        }
+    }
+    None
 }
 
 async fn execute_step(
@@ -1138,7 +1273,13 @@ mod tests {
             }) => {
                 assert_eq!(context, "kind-demo");
                 assert!(version.is_none());
-                assert_eq!(sets, &vec!["kubeProxyReplacement=false"]);
+                assert_eq!(
+                    sets,
+                    &vec![
+                        "kubeProxyReplacement=true",
+                        "ingressController.enabled=true"
+                    ]
+                );
                 assert!(*wait);
             }
             other => panic!("expected CiliumInstall, got {other:?}"),
@@ -1170,12 +1311,10 @@ mod tests {
             "write-kind-config",
             "kind-create",
             "merge-kubeconfig",
-            "cni-cilium-install",
-            "cilium-hubble-enable",
-            "cilium-ingress-enable",
             "cilium-gateway-crds-download",
             "cilium-gateway-crds-apply",
-            "cilium-gateway-enable",
+            "cni-cilium-install",
+            "cilium-hubble-enable",
             "cilium-clustermesh-enable",
             "final-verify",
         ];
@@ -1185,10 +1324,12 @@ mod tests {
                 assert_eq!(
                     sets,
                     &vec![
-                        "kubeProxyReplacement=false",
+                        "kubeProxyReplacement=true",
                         "cluster.name=mesh-a",
                         "cluster.id=7",
                         "clustermesh.apiserver.service.type=NodePort",
+                        "ingressController.enabled=true",
+                        "gatewayAPI.enabled=true",
                     ]
                 );
             }
@@ -1207,17 +1348,104 @@ mod tests {
             }
             other => panic!("expected apply, got {other:?}"),
         }
-        match &find(&plan, "cilium-gateway-enable").command {
-            ProvisionAction::Command(KindCommand::CiliumInstall { sets, .. }) => {
-                assert_eq!(sets, &vec!["gatewayAPI.enabled=true"]);
-            }
-            other => panic!("expected CiliumInstall, got {other:?}"),
-        }
+        assert!(
+            !ids(&plan).contains(&"cilium-ingress-enable".to_string()),
+            "ingress value is carried by the base install: {:?}",
+            ids(&plan)
+        );
+        assert!(
+            !ids(&plan).contains(&"cilium-gateway-enable".to_string()),
+            "gateway value is carried by the base install: {:?}",
+            ids(&plan)
+        );
         match &find(&plan, "cilium-clustermesh-enable").command {
-            ProvisionAction::Command(KindCommand::CiliumClustermeshEnable { context }) => {
+            ProvisionAction::Command(KindCommand::CiliumClustermeshEnable {
+                context,
+                service_type,
+            }) => {
                 assert_eq!(context, "kind-demo");
+                assert_eq!(service_type.as_deref(), Some("NodePort"));
             }
             other => panic!("expected clustermesh, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cilium_version_policy_for_kernel() {
+        let pinned = Some(manifests::CILIUM_VERSION_KERNEL_72);
+        assert_eq!(cilium_version_for_kernel("7.2.4-200.fc44.x86_64"), pinned);
+        assert_eq!(cilium_version_for_kernel("7.2"), pinned);
+        assert_eq!(cilium_version_for_kernel("7.10.0"), pinned);
+        assert_eq!(cilium_version_for_kernel("8.0.0"), pinned);
+        assert_eq!(cilium_version_for_kernel("7.1.8"), None);
+        assert_eq!(cilium_version_for_kernel("6.19.10"), None);
+        assert_eq!(cilium_version_for_kernel("5.15.0-1092-azure"), None);
+        assert_eq!(cilium_version_for_kernel(""), None);
+        assert_eq!(cilium_version_for_kernel("not-a-kernel"), None);
+    }
+
+    #[test]
+    fn plan_cilium_pins_exact_version_when_given() {
+        let mut spec = base_spec();
+        spec.cni = Cni::Cilium;
+        spec.cilium = Some(CiliumOptions {
+            api_gateway: true,
+            ingress: true,
+            ..CiliumOptions::default()
+        });
+        let plan = build_plan_with_cilium_version(
+            &spec,
+            &data_dir(),
+            Path::new("/x/config"),
+            Some("v1.21.0-pre.2"),
+        )
+        .unwrap();
+        let args = |id: &str| match &find(&plan, id).command {
+            ProvisionAction::Command(command) => command.to_cmd().argv(),
+            other => panic!("expected command, got {other:?}"),
+        };
+        assert_eq!(
+            args("cni-cilium-install"),
+            vec![
+                "cilium",
+                "install",
+                "--context",
+                "kind-demo",
+                "--version",
+                "v1.21.0-pre.2",
+                "--set",
+                "kubeProxyReplacement=true",
+                "--set",
+                "ingressController.enabled=true",
+                "--set",
+                "gatewayAPI.enabled=true",
+                "--wait"
+            ]
+        );
+        let all = ids(&plan);
+        let pos = |id: &str| all.iter().position(|step| step == id).unwrap();
+        assert!(pos("cilium-gateway-crds-apply") < pos("cni-cilium-install"));
+    }
+
+    #[test]
+    fn plan_cilium_without_version_omits_flag() {
+        let mut spec = base_spec();
+        spec.cni = Cni::Cilium;
+        spec.cilium = Some(CiliumOptions {
+            api_gateway: true,
+            ingress: true,
+            ..CiliumOptions::default()
+        });
+        let plan = build_plan(&spec, &data_dir(), Path::new("/x/config")).unwrap();
+        for step in &plan.steps {
+            if let ProvisionAction::Command(command) = &step.command {
+                let argv = command.to_cmd().argv();
+                assert!(
+                    !argv.iter().any(|arg| arg == "--version"),
+                    "{}: unexpected version pin in {argv:?}",
+                    step.id
+                );
+            }
         }
     }
 
@@ -1605,7 +1833,15 @@ mod tests {
         });
         spec.ingress = Some(IngressController::Cilium);
         let plan = build_plan(&spec, &data_dir(), Path::new("/x/config")).unwrap();
-        assert!(ids(&plan).contains(&"cilium-ingress-enable".to_string()));
+        match &find(&plan, "cni-cilium-install").command {
+            ProvisionAction::Command(KindCommand::CiliumInstall { sets, .. }) => {
+                assert!(
+                    sets.contains(&"ingressController.enabled=true".to_string()),
+                    "base install must carry the ingress value: {sets:?}"
+                );
+            }
+            other => panic!("expected CiliumInstall, got {other:?}"),
+        }
         assert!(
             !ids(&plan).iter().any(|id| id.starts_with("ingress-nginx-")),
             "{:?}",
@@ -1620,8 +1856,10 @@ mod tests {
 
     #[test]
     fn plan_cilium_extras_ordering_invariants() {
-        // cni-cilium-install must precede hubble/gateway/ingress/clustermesh;
-        // every cilium extra must precede the final verify.
+        // Gateway API CRDs must be applied before the single base install
+        // (the operator caches CRD discovery at startup); cni-cilium-install
+        // must precede hubble/clustermesh; every cilium extra must precede
+        // the final verify.
         let mut spec = base_spec();
         spec.cni = Cni::Cilium;
         spec.cilium = Some(CiliumOptions {
@@ -1635,11 +1873,53 @@ mod tests {
         let plan = build_plan(&spec, &data_dir(), Path::new("/x/config")).unwrap();
         let all = ids(&plan);
         let pos = |id: &str| all.iter().position(|step| step == id).unwrap();
+        assert!(pos("cilium-gateway-crds-download") < pos("cilium-gateway-crds-apply"));
+        assert!(pos("cilium-gateway-crds-apply") < pos("cni-cilium-install"));
         assert!(pos("cni-cilium-install") < pos("cilium-hubble-enable"));
-        assert!(pos("cni-cilium-install") < pos("cilium-ingress-enable"));
-        assert!(pos("cni-cilium-install") < pos("cilium-gateway-crds-download"));
         assert!(pos("cni-cilium-install") < pos("cilium-clustermesh-enable"));
-        assert!(pos("cilium-gateway-crds-apply") < pos("cilium-gateway-enable"));
         assert!(pos("cilium-clustermesh-enable") < pos("final-verify"));
+    }
+
+    #[test]
+    fn agent_probe_failure_matches_live_fatal_log() {
+        // Exact tail of the agent log captured from the live reproduction on
+        // kernel 7.2.4-200.fc44 with Cilium v1.20.1 (2026-09-13).
+        let log = "\
+level=fatal msg=\"failed to probe helper\" subsys=datapath-loader \
+error=\"detect support for FnSetRetval for program type CGroupSock: load program: \
+invalid argument: 0: (85) call bpf_set_retval#187: R1 is not a scalar (2 line(s) omitted)\"";
+        assert!(is_agent_probe_failure(log));
+    }
+
+    #[test]
+    fn agent_probe_failure_requires_both_markers() {
+        assert!(!is_agent_probe_failure(
+            "failed to probe helper for program type X"
+        ));
+        assert!(!is_agent_probe_failure(
+            "unrelated error: call bpf_set_retval#187: R1 is not a scalar"
+        ));
+        assert!(!is_agent_probe_failure(""));
+        assert!(!is_agent_probe_failure(
+            "level=fatal msg=\"failed to enable compression\""
+        ));
+    }
+
+    #[test]
+    fn pod_names_from_json_parses_items_and_ignores_garbage() {
+        let json = r#"{
+            "items": [
+                {"metadata": {"name": "cilium-abcde", "namespace": "kube-system"}},
+                {"metadata": {"name": "cilium-12345"}},
+                {"metadata": {}}
+            ]
+        }"#;
+        assert_eq!(
+            pod_names_from_json(json),
+            vec!["cilium-abcde", "cilium-12345"]
+        );
+        assert!(pod_names_from_json("not json").is_empty());
+        assert!(pod_names_from_json(r#"{"items": []}"#).is_empty());
+        assert!(pod_names_from_json("").is_empty());
     }
 }

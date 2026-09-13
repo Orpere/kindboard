@@ -84,13 +84,25 @@ async fn create_cluster(_name: &str, spec: &ClusterSpec) {
     }
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-    let result = kindboard_core::run_plan(&plan, _name, None, &tx).await;
-    while let Ok(event) = rx.try_recv() {
-        if let ProvisionEvent::StepOutput { line, .. } = event {
-            eprintln!("[kind] {line}");
+    let collector = tokio::spawn(async move {
+        let mut lines = Vec::new();
+        while let Some(event) = rx.recv().await {
+            if let ProvisionEvent::StepOutput { line, .. } = event {
+                lines.push(line);
+            }
         }
+        lines
+    });
+    let result = kindboard_core::run_plan(&plan, _name, None, &tx).await;
+    drop(tx);
+    let lines = collector.await.unwrap_or_default();
+    for line in &lines {
+        eprintln!("[kind] {line}");
     }
-    assert!(result.is_ok(), "create plan failed: {result:?}");
+    assert!(
+        result.is_ok(),
+        "create plan failed: {result:?}\noutput: {lines:?}"
+    );
 }
 
 #[tokio::test]
@@ -270,13 +282,18 @@ async fn e2e_run_plan_executes_full_flow() {
     std::fs::create_dir_all(&data_dir).unwrap();
     let plan = kindboard_core::build_plan(&spec, &data_dir, &test_kubeconfig_path()).unwrap();
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-    let result = kindboard_core::run_plan(&plan, &name, None, &tx).await;
-    let mut events = Vec::new();
-    while let Ok(event) = rx.try_recv() {
-        if let ProvisionEvent::StepOutput { line, .. } = event {
-            events.push(line);
+    let collector = tokio::spawn(async move {
+        let mut lines = Vec::new();
+        while let Some(event) = rx.recv().await {
+            if let ProvisionEvent::StepOutput { line, .. } = event {
+                lines.push(line);
+            }
         }
-    }
+        lines
+    });
+    let result = kindboard_core::run_plan(&plan, &name, None, &tx).await;
+    drop(tx);
+    let events = collector.await.unwrap_or_default();
     match result {
         Ok(()) => {}
         Err(err) => {
@@ -302,11 +319,11 @@ async fn e2e_run_plan_executes_full_flow() {
 /// Clusters are deleted afterwards unless `KINDBOARD_E2E_KEEP=1` (manual
 /// inspection / screenshots; names then use the `kbcn-*` prefix).
 ///
-/// `KINDBOARD_E2E_SKIP_CILIUM=1` skips the cilium leg with a notice. Use it
-/// on hosts where the cilium agent cannot start for reasons outside
-/// kindboard (e.g. kernel 7.x changed the `bpf_set_retval` helper
-/// signature; cilium's startup probe fails with "R1 is not a scalar" and
-/// the agent crash-loops — see docs/howtos/create-cni-clusters.md).
+/// `KINDBOARD_E2E_SKIP_CILIUM=1` skips the cilium leg with a notice — an
+/// escape hatch for hosts where the agent cannot start for reasons outside
+/// kindboard. The cilium leg works on kernels >= 7.2: the plan pins
+/// `CILIUM_VERSION_KERNEL_72` when the Docker host kernel requires it
+/// (upstream cilium#48016).
 #[tokio::test]
 async fn e2e_cni_matrix_flannel_calico_cilium() {
     let Some(()) = require_e2e() else { return };
@@ -323,10 +340,7 @@ async fn e2e_cni_matrix_flannel_calico_cilium() {
         (kindboard_core::Cni::Cilium, "cilium"),
     ] {
         if cni == kindboard_core::Cni::Cilium && skip_cilium {
-            eprintln!(
-                "SKIP: cilium leg disabled (KINDBOARD_E2E_SKIP_CILIUM=1); \
-                 cilium agent cannot start on this host kernel"
-            );
+            eprintln!("SKIP: cilium leg disabled (KINDBOARD_E2E_SKIP_CILIUM=1)");
             continue;
         }
         let name = if keep {
@@ -354,19 +368,35 @@ async fn e2e_cni_matrix_flannel_calico_cilium() {
         let data_dir = test_data_dir();
         let kubeconfig_path = test_kubeconfig_path();
         std::fs::create_dir_all(&data_dir).unwrap();
-        let plan = kindboard_core::build_plan(&spec, &data_dir, &kubeconfig_path).unwrap();
+        let cilium_version = if cni == kindboard_core::Cni::Cilium {
+            kindboard_core::detect_cilium_version().await
+        } else {
+            None
+        };
+        let plan = kindboard_core::build_plan_with_cilium_version(
+            &spec,
+            &data_dir,
+            &kubeconfig_path,
+            cilium_version.as_deref(),
+        )
+        .unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let collector = tokio::spawn(async move {
+            let mut lines = Vec::new();
+            while let Some(event) = rx.recv().await {
+                if let ProvisionEvent::StepOutput { line, .. } = event {
+                    lines.push(line);
+                }
+            }
+            lines
+        });
         let result = tokio::time::timeout(
             Duration::from_secs(900),
             kindboard_core::run_plan(&plan, &name, None, &tx),
         )
         .await;
-        let mut lines = Vec::new();
-        while let Ok(event) = rx.try_recv() {
-            if let ProvisionEvent::StepOutput { line, .. } = event {
-                lines.push(line);
-            }
-        }
+        drop(tx);
+        let lines = collector.await.unwrap_or_default();
         match result {
             Ok(Ok(())) => {}
             Ok(Err(err)) => {
@@ -379,7 +409,7 @@ async fn e2e_cni_matrix_flannel_calico_cilium() {
                 if !keep {
                     cleanup_cluster(&name).await;
                 }
-                panic!("{tag} plan timed out after 15 min");
+                panic!("{tag} plan timed out after 15 min\noutput: {lines:?}");
             }
         }
         // Live verification: kind lists the cluster, the merged kubeconfig

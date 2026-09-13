@@ -35,7 +35,7 @@ pub use kindctl::{KindCommand, parse_kind_get_clusters, parse_kind_get_nodes};
 pub use kubeconfig::{KubeconfigStore, default_path};
 pub use provision::{
     CreatePlan, ProvisionAction, ProvisionEvent, ProvisionStep, StepId, VerifySpec, build_plan,
-    run_plan,
+    build_plan_with_cilium_version, cilium_version_for_kernel, detect_cilium_version, run_plan,
 };
 pub use spec::{
     CiliumOptions, ClusterSpec, Cni, DEFAULT_K8S_VERSION, DEFAULT_POD_CIDR, DEFAULT_SERVICE_CIDR,

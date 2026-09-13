@@ -85,6 +85,7 @@ networking:
   podSubnet: <spec.pod_cidr>        # only if != default or CNI != kindnet
   serviceSubnet: <spec.service_cidr>
   disableDefaultCNI: <cni != KindnetDefault>
+  kubeProxyMode: none               # only when cni == Cilium (Cilium replaces kube-proxy)
 nodes:
   - role: control-plane
     # k8s version is set via the node image, not a field:
@@ -112,6 +113,7 @@ pub enum KindCommand {
 
     // ---- docker (node/log inspection) ----
     DockerVersion,
+    DockerKernelVersion,                               // "docker info --format {{.KernelVersion}}" (host/VM kernel kind nodes run on)
     DockerPs { name_filter: String },                  // "docker ps --filter name=<cluster>- --format json"
     DockerLogs { container: String, follow: bool, tail: Option<u32> }, // "docker logs [--follow] [--tail <n>] <container>"
     DockerInspect { container: String },               // "docker inspect <container>"
@@ -123,6 +125,10 @@ pub enum KindCommand {
     KubectlWait { context: String, kind: String, name: String, ns: String, condition: String, timeout: String },
     KubectlLogs { context: String, pod: String, ns: String, container: Option<String>, follow: bool, tail: Option<u32> },
     KubectlGetEvents { context: String, ns: String },  // "kubectl --context <c> get events -n <ns> -o json"
+    KubectlGetCrd { context: String, name: String },   // "kubectl --context <c> get crd <name>" (exit 0 = CRD exists)
+    KubectlGetPodsByLabel { context: String, ns: String, label: String },
+    // "kubectl --context <c> get pods [-n <ns>] -l <label> -o json" —
+    // used to diagnose failed CNI installs (e.g. crash-looping cilium agent pods).
 
     // ---- helm (ingress + generic chart install) ----
     HelmVersion,                                       // "helm version --short"
@@ -138,7 +144,9 @@ pub enum KindCommand {
     CiliumInstall { context: String, version: Option<String>, sets: Vec<String>, wait: bool },
     CiliumStatus { context: String, wait: bool },      // "cilium status [--wait]"
     CiliumHubbleEnable { context: String, ui: bool, relay: bool },
-    CiliumClustermeshEnable { context: String },
+    CiliumClustermeshEnable { context: String, service_type: Option<String> },
+    // "cilium clustermesh enable [--context <c>] [--service-type <t>]" —
+    // kind has no LoadBalancer, so service_type is NodePort (CLI cannot auto-detect).
     CiliumClustermeshConnect { context: String, destination_context: String },
     CiliumClustermeshDisconnect { context: String, destination_context: String },
 }
@@ -194,7 +202,7 @@ Exact values (per-platform package names, detect commands, and fallback URLs) li
 | kindnet-default | false | — | helm install (80/443 already mapped) | n/a | n/a |
 | flannel | true | `kubectl apply kube-flannel.yml` | helm install | n/a | n/a |
 | calico | true | `kubectl create tigera-operator.yaml` → apply `Installation` CR (cidr=pod_cidr) | helm install | n/a | n/a |
-| cilium | true | `cilium install --set kubeProxyReplacement=false [--set cluster.name/--set cluster.id if mesh]` | n/a | `cilium install --set ingressController.enabled=true` | hubble / gateway-api / clustermesh below |
+| cilium | true (`kubeProxyMode: none`) | Gateway API v1.6.2 CRDs (server-side) when `api_gateway`, then one `cilium install --set kubeProxyReplacement=true [--set cluster.name/--set cluster.id if mesh] [--set ingressController.enabled=true] [--set gatewayAPI.enabled=true]` | n/a | value carried by the base install | hubble / clustermesh after install |
 
 **Pod-CIDR consistency rule (applies to flannel & calico):** with `disableDefaultCNI: true`, kind does **not** install a CNI, but `kube-controller-manager --cluster-cidr` still allocates node `podCIDR`s from `podSubnet`. The CNI's own network must match:
 
@@ -208,10 +216,12 @@ Exact values (per-platform package names, detect commands, and fallback URLs) li
 
 | Extra | Commands | Notes |
 |---|---|---|
-| Hubble | `cilium hubble enable --relay --ui` | `--relay` default true, `--ui` optional |
-| Ingress controller | `cilium install --set ingressController.enabled=true` | creates a LoadBalancer service. kindboard installs cilium with `kubeProxyReplacement=false`; some cilium releases require kube-proxy replacement for the ingress controller — on-host ingress verification is pending where the cilium agent cannot start (see architecture verification log). **Note:** the `cilium ingress enable` subcommand was removed from current cilium-cli — use `--set`. |
-| API Gateway | install Gateway API CRDs (`kubectl apply --server-side …gateway…`) then `cilium upgrade --set gatewayAPI.enabled=true` | **no `--gateway-api` flag and no `cilium gateway-api` command exist** in current cilium-cli — see §6 |
-| Mesh (clustermesh) | `cilium install --set cluster.name=X --set cluster.id=N --set clustermesh.apiserver.service.type=NodePort` → `cilium clustermesh enable` → `cilium clustermesh connect --destination-context <other>` | NodePort required on kind (no LoadBalancer); IDs unique across mesh |
+| Hubble | `cilium hubble enable --relay --ui` | `--relay` default true, `--ui` optional; runs after the base install |
+| Ingress controller | `--set ingressController.enabled=true` on the base install | creates a LoadBalancer service. kind renders `kubeProxyMode: none` and kindboard installs Cilium with `kubeProxyReplacement=true`, so Cilium fully replaces kube-proxy. **Note:** the `cilium ingress enable` subcommand was removed from current cilium-cli — use `--set`; values ride the single base install, no post-install `cilium upgrade`. |
+| API Gateway | apply Gateway API **v1.6.2** standard CRDs (`kubectl apply --server-side …`) **before** the base install, then `--set gatewayAPI.enabled=true` on the base install | v1.6.2 is required because Cilium >= 1.21 needs `tlsroutes`/`referencegrants` v1; v1.4.0 ships only v1alpha3/v1beta1. The operator caches CRD discovery at startup, so the CRDs must exist before the install (a post-install `cilium upgrade` does not restart the operator). Cilium's Gateway API controller is disabled unless kube-proxy replacement is on. **no `--gateway-api` flag and no `cilium gateway-api` command exist** in current cilium-cli — see §6 |
+| Mesh (clustermesh) | `--set cluster.name=X --set cluster.id=N --set clustermesh.apiserver.service.type=NodePort` on the base install → `cilium clustermesh enable --service-type NodePort` → `cilium clustermesh connect --destination-context <other>` | NodePort required on kind (no LoadBalancer); IDs unique across mesh |
+
+**Kernel >= 7.2 version pinning:** on Linux kernels >= 7.2 stable Cilium crash-loops at startup on the `bpf_set_retval` probe (upstream cilium#48016; no stable release contains the fix as of 2026-09-13). The plan probes the Docker host kernel (`docker info --format '{{.KernelVersion}}'`) and installs `CILIUM_VERSION_KERNEL_72` (`v1.21.0-pre.2`) when `(major, minor) >= (7, 2)`, otherwise the cilium CLI default. The version is pinned on the single base install; only hubble/mesh use post-install CLI commands.
 
 ### 4.1 Create flow (sequence)
 
@@ -236,7 +246,7 @@ sequenceDiagram
     P->>C: helm repo add + helm install (wait watcher)
   end
   opt cilium extras
-    P->>C: cilium hubble/ingress/gateway/clustermesh per matrix
+    P->>C: Gateway API CRDs (server-side, before install); base install carries ingress/gateway/mesh values; hubble/clustermesh after
   end
   P->>P: persist ClusterSpec (ADR-0006), emit Event::ClusterReady
 ```
@@ -294,7 +304,7 @@ pub enum NodeRole { ControlPlane, Worker }
 
 Two product-brief assumptions do **not** match the current cilium-cli (main, cilium 1.20.1 era). Flagging for client sign-off:
 
-1. **"Gateway API via `--gateway-api`"** — current cilium-cli has **no** `--gateway-api` flag and no `cilium gateway-api` subcommand. Gateway API is enabled with the Helm value `gatewayAPI.enabled=true` (via `cilium install/upgrade --set gatewayAPI.enabled=true`, plus installing the Gateway API CRDs first). Source: `cilium-cli/cli/install.go` flag list; cilium `Documentation/network/servicemesh/gateway-api/installation.rst`.
+1. **"Gateway API via `--gateway-api`"** — current cilium-cli has **no** `--gateway-api` flag and no `cilium gateway-api` subcommand. Gateway API is enabled with the Helm value `gatewayAPI.enabled=true` (via `cilium install --set gatewayAPI.enabled=true`, plus installing the Gateway API CRDs first). Source: `cilium-cli/cli/install.go` flag list; cilium `Documentation/network/servicemesh/gateway-api/installation.rst`.
 2. **"cilium ingress enable"** — the `cilium ingress` subcommand was removed from cilium-cli. Ingress is enabled with `--set ingressController.enabled=true` (documented in cilium ingress guide). Source: cilium-cli `cli/` directory contains only `clustermesh`, `hubble`, `install`, `status`, `sysdump`, `uninstall`, `upgrade`; cilium `Documentation/network/servicemesh/ingress.rst`.
 
 Both are absorbed into the `KindCommand`/provisioning matrix (§2, §4) using `--set` flags, so no feature is lost — only the invocation mechanism changes.

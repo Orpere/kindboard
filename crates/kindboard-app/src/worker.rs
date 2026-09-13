@@ -638,8 +638,18 @@ async fn create_phase(
     event_tx: &Sender<CoreEvent>,
     token: &CancellationToken,
 ) -> Result<(), String> {
-    let plan = core::build_plan(spec, env.data_dir.root(), &env.kubeconfig_path)
-        .map_err(|err| err.to_string())?;
+    let cilium_version = if spec.cni == core::Cni::Cilium {
+        core::detect_cilium_version().await
+    } else {
+        None
+    };
+    let plan = core::build_plan_with_cilium_version(
+        spec,
+        env.data_dir.root(),
+        &env.kubeconfig_path,
+        cilium_version.as_deref(),
+    )
+    .map_err(|err| err.to_string())?;
     let (plan_tx, mut plan_rx) = tokio::sync::mpsc::channel::<ProvisionEvent>(64);
     let name = spec.name.clone();
     let forward_tx = event_tx.clone();

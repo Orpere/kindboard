@@ -424,7 +424,9 @@ impl fmt::Display for KindConfig {
 /// - `kind: Cluster`, `apiVersion: kind.x-k8s.io/v1alpha4`
 /// - `featureGates` only when non-empty
 /// - `networking`: `ipFamily: ipv4`, `podSubnet` (only if non-default or
-///   CNI != kindnet), `serviceSubnet`, `disableDefaultCNI: cni != KindnetDefault`
+///   CNI != kindnet), `serviceSubnet`, `disableDefaultCNI: cni != KindnetDefault`,
+///   `kubeProxyMode: none` (Cilium only — Cilium replaces kube-proxy; its
+///   Gateway API controller requires kube-proxy replacement)
 /// - nodes: exactly one control-plane + `worker_count` workers, all with the
 ///   version node image; `extraPortMappings` on the control-plane.
 pub fn to_kind_yaml(spec: &ClusterSpec) -> String {
@@ -446,6 +448,11 @@ pub fn to_kind_yaml(spec: &ClusterSpec) -> String {
             },
             service_subnet: spec.service_cidr.clone(),
             disable_default_cni: spec.cni != Cni::KindnetDefault,
+            kube_proxy_mode: if spec.cni == Cni::Cilium {
+                Some("none".to_string())
+            } else {
+                None
+            },
         },
         nodes: build_nodes(spec),
     };
@@ -487,6 +494,8 @@ struct KindNetworking {
     service_subnet: String,
     #[serde(rename = "disableDefaultCNI")]
     disable_default_cni: bool,
+    #[serde(rename = "kubeProxyMode", skip_serializing_if = "Option::is_none")]
+    kube_proxy_mode: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -952,6 +961,7 @@ networking:
   podSubnet: 10.244.0.0/16
   serviceSubnet: 10.96.0.0/16
   disableDefaultCNI: true
+  kubeProxyMode: none
 nodes:
 - role: control-plane
   image: kindest/node:v1.37.0
@@ -1038,6 +1048,7 @@ networking:
   podSubnet: 10.244.0.0/16
   serviceSubnet: 10.96.0.0/16
   disableDefaultCNI: true
+  kubeProxyMode: none
 nodes:
 - role: control-plane
   image: kindest/node:v1.37.0
@@ -1106,6 +1117,11 @@ nodes:
                 wants_disable,
                 "combo {cni:?} × {ingress:?} disableDefaultCNI wrong:\n{yaml}"
             );
+            assert_eq!(
+                yaml.contains("kubeProxyMode: none"),
+                cni == Cni::Cilium,
+                "combo {cni:?} × {ingress:?} kubeProxyMode wrong:\n{yaml}"
+            );
             let wants_ports = matches!(
                 ingress,
                 Some(IngressController::Nginx) | Some(IngressController::Traefik)
@@ -1122,6 +1138,26 @@ nodes:
             );
         }
     }
+    #[test]
+    fn kube_proxy_mode_none_only_for_cilium() {
+        // kind must not run kube-proxy for Cilium: Cilium replaces it, and
+        // Cilium's Gateway API controller is disabled without the replacement.
+        for cni in [Cni::KindnetDefault, Cni::Flannel, Cni::Calico] {
+            let mut spec = base_spec();
+            spec.cni = cni;
+            let yaml = to_kind_yaml(&spec);
+            assert!(
+                !yaml.contains("kubeProxyMode"),
+                "{cni:?} must not set kubeProxyMode:\n{yaml}"
+            );
+        }
+        let mut spec = base_spec();
+        spec.cni = Cni::Cilium;
+        spec.cilium = Some(CiliumOptions::default());
+        let yaml = to_kind_yaml(&spec);
+        assert!(yaml.contains("kubeProxyMode: none"), "{yaml}");
+    }
+
     #[test]
     fn custom_version_renders_node_image() {
         let mut spec = base_spec();
