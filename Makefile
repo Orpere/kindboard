@@ -4,14 +4,19 @@
 # for release artifacts is scripts/build.sh (dist/ + SHA256SUMS); the Makefile
 # only exposes convenient entry points.
 #
-# No GitHub Actions by design: everything here runs locally on Linux/macOS.
+# No GitHub Actions by design: releases and the GitHub Pages deploy both run
+# from here (see `make release` and `make publish`).
 
 SHELL := /bin/bash
 CARGO ?= cargo
 CARGO_AUDIT ?= $(HOME)/.cargo/bin/cargo-audit
 DIST_DIR := dist
+ROOT := $(abspath .)
+REPO ?= Orpere/kindboard
+VERSION := $(shell grep -m1 '^version' crates/kindboard-app/Cargo.toml | cut -d'"' -f2)
+PAGES_DIR := /tmp/kindboard-pages
 
-.PHONY: help all build build-all run fmt fmt-check clippy test e2e audit check assets dist clean version
+.PHONY: help all build build-all run fmt fmt-check clippy test e2e audit check assets dist clean version release publish
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -60,3 +65,23 @@ clean: ## Remove build artifacts and dist/
 
 version: ## Print the app version (from kindboard-app/Cargo.toml)
 	@grep -m1 '^version' crates/kindboard-app/Cargo.toml | cut -d'"' -f2
+
+release: ## Tag v$(VERSION) + GitHub release with dist/ assets (local, no CI)
+	@command -v gh >/dev/null 2>&1 || { echo "error: gh CLI required"; exit 1; }
+	@git diff-index --quiet HEAD -- || { echo "error: working tree not clean — commit first"; exit 1; }
+	@git rev-parse -q --verify "refs/tags/v$(VERSION)" >/dev/null && { echo "error: tag v$(VERSION) already exists"; exit 1; } || true
+	$(MAKE) build
+	git tag -a "v$(VERSION)" -m "kindboard v$(VERSION)"
+	git push origin "v$(VERSION)"
+	gh release create "v$(VERSION)" --title "kindboard v$(VERSION)" --generate-notes \
+		$$(find $(DIST_DIR) -maxdepth 1 -name 'kindboard-*.tar.gz' | sort) $(DIST_DIR)/SHA256SUMS
+
+publish: ## Deploy web/ to GitHub Pages via the gh-pages branch (no Actions)
+	@command -v gh >/dev/null 2>&1 || { echo "error: gh CLI required"; exit 1; }
+	@rm -rf $(PAGES_DIR) && mkdir -p $(PAGES_DIR)
+	@cp -R web/* $(PAGES_DIR)/
+	@cd $(PAGES_DIR) && git init -q && git add -A && \
+		git -c user.name="kindboard" -c user.email="kindboard@users.noreply.github.com" commit -qm "publish $(VERSION)"
+	@cd $(PAGES_DIR) && git push -q -f "$$(git -C $(ROOT) remote get-url origin)" HEAD:gh-pages
+	@gh api -X PUT repos/$(REPO)/pages -f source[branch]=gh-pages -f source[path]=/ >/dev/null
+	@echo "published -> https://orpere.github.io/kindboard/"
