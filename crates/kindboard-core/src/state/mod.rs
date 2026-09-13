@@ -271,6 +271,11 @@ pub struct Settings {
     pub remember_last_wizard: bool,
     /// Reconciliation poll interval in seconds.
     pub poll_interval_secs: u64,
+    /// Active theme id ("dark" | "light" | "high-contrast"). `None` =
+    /// default (dark). Introduced in 0.1.3 — older files deserialize to
+    /// `None` without migration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
     /// Extra fields, preserved on save.
     #[serde(flatten)]
     pub other: serde_json::Map<String, serde_json::Value>,
@@ -282,6 +287,7 @@ impl Default for Settings {
             default_k8s_version: Some(spec::DEFAULT_K8S_VERSION.to_string()),
             remember_last_wizard: true,
             poll_interval_secs: DEFAULT_POLL_INTERVAL_SECS,
+            theme: None,
             other: serde_json::Map::new(),
         }
     }
@@ -443,6 +449,7 @@ mod tests {
             default_k8s_version: Some("1.30.0".to_string()),
             remember_last_wizard: false,
             poll_interval_secs: 10,
+            theme: Some("light".to_string()),
             other: serde_json::Map::new(),
         };
         settings
@@ -453,6 +460,31 @@ mod tests {
         let loaded = data.load_settings().unwrap();
         assert_eq!(loaded, settings);
         assert!(data.settings_path().is_file());
+    }
+
+    #[test]
+    fn settings_without_theme_deserializes_to_none_and_none_is_omitted() {
+        let dir = TempDir::new("settings-theme");
+        let data = DataDir::new(dir.path.clone()).unwrap();
+
+        // An older settings.json (no `theme` key) still loads.
+        std::fs::write(
+            data.settings_path(),
+            r#"{"remember_last_wizard":true,"poll_interval_secs":5,"foo":1}"#,
+        )
+        .unwrap();
+        let loaded = data.load_settings().unwrap();
+        assert_eq!(loaded.theme, None);
+        assert_eq!(
+            loaded.other.get("foo"),
+            Some(&serde_json::json!(1)),
+            "unknown keys must still flow into `other`"
+        );
+
+        // A serialized default Settings omits the `theme` key entirely.
+        let json = serde_json::to_vec_pretty(&Settings::default()).unwrap();
+        let text = String::from_utf8(json).unwrap();
+        assert!(!text.contains("theme"), "None theme must not be serialized");
     }
 
     #[test]

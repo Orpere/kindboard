@@ -115,146 +115,160 @@ pub enum WizardAction {
 pub fn show(ctx: &egui::Context, state: &mut WizardState) -> WizardAction {
     let mut action = WizardAction::Stay;
     let modal = Modal::new(egui::Id::new("create-wizard")).show(ctx, |ui| {
-        ui.set_width(520.0);
+        // Clamp to the viewport: the modal must really fit whatever the
+        // window size is (R3), so the form scrolls on short screens and
+        // shrinks on narrow ones.
+        ui.set_width(ui.available_width().min(520.0));
         ui.heading("Create cluster");
         ui.add_space(4.0);
 
-        ui.label("Name");
-        ui.add(
-            egui::TextEdit::singleline(&mut state.name)
-                .hint_text("my-cluster (lowercase, digits, dashes)")
-                .desired_width(360.0),
-        );
-        if !state.name.is_empty()
-            && let Err(err) = validate_name(&state.name)
-        {
-            inline_error(ui, &err.to_string());
-        }
-
-        ui.label("Kubernetes version");
-        ui.add(
-            egui::TextEdit::singleline(&mut state.k8s_version)
-                .hint_text("1.37.0")
-                .desired_width(200.0),
-        );
-
-        ui.add_space(4.0);
-        ui.strong("CNI");
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut state.cni, Cni::KindnetDefault, "Kindnet (default)");
-            ui.radio_value(&mut state.cni, Cni::Flannel, "Flannel");
-            ui.radio_value(&mut state.cni, Cni::Calico, "Calico");
-            ui.radio_value(&mut state.cni, Cni::Cilium, "Cilium");
-        });
-
-        ui.add_space(4.0);
-        ui.strong("Network CIDRs");
-        ui.horizontal(|ui| {
-            ui.label("pod:");
-            ui.add(
-                egui::TextEdit::singleline(&mut state.pod_cidr)
-                    .hint_text(kindboard_core::DEFAULT_POD_CIDR)
-                    .desired_width(160.0),
-            );
-            ui.label("service:");
-            ui.add(
-                egui::TextEdit::singleline(&mut state.service_cidr)
-                    .hint_text(kindboard_core::DEFAULT_SERVICE_CIDR)
-                    .desired_width(160.0),
-            );
-        });
-
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.strong("Workers");
-            ui.add(
-                egui::DragValue::new(&mut state.worker_count)
-                    .range(0..=kindboard_core::MAX_WORKERS)
-                    .suffix(" nodes"),
-            );
-            ui.label(
-                RichText::new("(1 control-plane is always added)")
-                    .color(theme::TEXT_DIM)
-                    .size(11.0),
-            );
-        });
-
-        ui.add_space(4.0);
-        ui.strong("Ingress controller");
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut state.ingress, None, "None");
-            ui.radio_value(&mut state.ingress, Some(IngressController::Nginx), "Nginx");
-            ui.radio_value(
-                &mut state.ingress,
-                Some(IngressController::Traefik),
-                "Traefik",
-            );
-            if state.cni == Cni::Cilium {
-                ui.radio_value(
-                    &mut state.ingress,
-                    Some(IngressController::Cilium),
-                    "Cilium",
+        let body_height = (ui.available_height() - 90.0).max(120.0);
+        egui::ScrollArea::vertical()
+            .id_salt("wizard-scroll")
+            .max_height(body_height)
+            .show(ui, |ui| {
+                ui.label("Name");
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.name)
+                        .hint_text("my-cluster (lowercase, digits, dashes)")
+                        .desired_width(f32::INFINITY),
                 );
-            }
-        });
-        if state.ingress == Some(IngressController::Cilium) && !state.cilium.ingress {
-            inline_error(
-                ui,
-                "Cilium ingress requires the 'Ingress Controller' cilium extra below",
-            );
-        }
-        match state.ingress {
-            Some(IngressController::Nginx | IngressController::Traefik) => {
-                ui.label(
-                    RichText::new("host ports 80/443 -> node ports are mapped automatically")
-                        .color(theme::TEXT_DIM)
-                        .size(11.0),
-                );
-            }
-            None if state.cni == Cni::Cilium && state.cilium.ingress => {
-                ui.label(
-                    RichText::new(
-                        "no host ports mapped; the Cilium ingress controller is installed by default (see Cilium extras)",
-                    )
-                    .color(theme::TEXT_DIM)
-                    .size(11.0),
-                );
-            }
-            _ => {
-                ui.label(
-                    RichText::new(
-                        "no host ports mapped (Cilium ingress uses a LoadBalancer service)",
-                    )
-                    .color(theme::TEXT_DIM)
-                    .size(11.0),
-                );
-            }
-        }
+                if !state.name.is_empty()
+                    && let Err(err) = validate_name(&state.name)
+                {
+                    inline_error(ui, &err.to_string());
+                }
 
-        if state.cni == Cni::Cilium {
-            ui.add_space(4.0);
-            ui.strong("Cilium extras");
-            ui.checkbox(&mut state.cilium.api_gateway, "API Gateway");
-            ui.checkbox(&mut state.cilium.hubble, "Hubble (relay + UI)");
-            ui.checkbox(&mut state.cilium.ingress, "Ingress Controller");
-            ui.checkbox(&mut state.cilium.mesh, "Clustermesh");
-            if state.cilium.mesh {
-                ui.horizontal(|ui| {
-                    ui.label("cluster id:");
-                    ui.add(egui::DragValue::new(&mut state.cilium.cluster_id).range(
-                        kindboard_core::spec::MIN_CLUSTER_ID..=kindboard_core::spec::MAX_CLUSTER_ID,
-                    ));
+                ui.label("Kubernetes version");
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.k8s_version)
+                        .hint_text("1.37.0")
+                        .desired_width(f32::INFINITY),
+                );
+
+                ui.add_space(4.0);
+                ui.strong("CNI");
+                ui.horizontal_wrapped(|ui| {
+                    ui.radio_value(&mut state.cni, Cni::KindnetDefault, "Kindnet (default)");
+                    ui.radio_value(&mut state.cni, Cni::Flannel, "Flannel");
+                    ui.radio_value(&mut state.cni, Cni::Calico, "Calico");
+                    ui.radio_value(&mut state.cni, Cni::Cilium, "Cilium");
                 });
-                ui.horizontal(|ui| {
-                    ui.label("cluster name:");
+
+                ui.add_space(4.0);
+                ui.strong("Network CIDRs");
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("pod:");
                     ui.add(
-                        egui::TextEdit::singleline(&mut state.cilium.cluster_name)
-                            .hint_text("lowercase, <= 32 chars")
-                            .desired_width(220.0),
+                        egui::TextEdit::singleline(&mut state.pod_cidr)
+                            .hint_text(kindboard_core::DEFAULT_POD_CIDR)
+                            .desired_width(160.0),
+                    );
+                    ui.label("service:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut state.service_cidr)
+                            .hint_text(kindboard_core::DEFAULT_SERVICE_CIDR)
+                            .desired_width(160.0),
                     );
                 });
-            }
-        }
+
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.strong("Workers");
+                    ui.add(
+                        egui::DragValue::new(&mut state.worker_count)
+                            .range(0..=kindboard_core::MAX_WORKERS)
+                            .suffix(" nodes"),
+                    );
+                    ui.label(
+                        RichText::new("(1 control-plane is always added)")
+                            .color(theme::pal().text_dim)
+                            .size(11.0),
+                    );
+                });
+
+                ui.add_space(4.0);
+                ui.strong("Ingress controller");
+                ui.horizontal_wrapped(|ui| {
+                    ui.radio_value(&mut state.ingress, None, "None");
+                    ui.radio_value(&mut state.ingress, Some(IngressController::Nginx), "Nginx");
+                    ui.radio_value(
+                        &mut state.ingress,
+                        Some(IngressController::Traefik),
+                        "Traefik",
+                    );
+                    if state.cni == Cni::Cilium {
+                        ui.radio_value(
+                            &mut state.ingress,
+                            Some(IngressController::Cilium),
+                            "Cilium",
+                        );
+                    }
+                });
+                if state.ingress == Some(IngressController::Cilium) && !state.cilium.ingress {
+                    inline_error(
+                        ui,
+                        "Cilium ingress requires the 'Ingress Controller' cilium extra below",
+                    );
+                }
+                match state.ingress {
+                    Some(IngressController::Nginx | IngressController::Traefik) => {
+                        ui.label(
+                            RichText::new(
+                                "host ports 80/443 -> node ports are mapped automatically",
+                            )
+                            .color(theme::pal().text_dim)
+                            .size(11.0),
+                        );
+                    }
+                    None if state.cni == Cni::Cilium && state.cilium.ingress => {
+                        ui.label(
+                            RichText::new(
+                                "no host ports mapped; the Cilium ingress controller is installed by default (see Cilium extras)",
+                            )
+                            .color(theme::pal().text_dim)
+                            .size(11.0),
+                        );
+                    }
+                    _ => {
+                        ui.label(
+                            RichText::new(
+                                "no host ports mapped (Cilium ingress uses a LoadBalancer service)",
+                            )
+                            .color(theme::pal().text_dim)
+                            .size(11.0),
+                        );
+                    }
+                }
+
+                if state.cni == Cni::Cilium {
+                    ui.add_space(4.0);
+                    ui.strong("Cilium extras");
+                    ui.checkbox(&mut state.cilium.api_gateway, "API Gateway");
+                    ui.checkbox(&mut state.cilium.hubble, "Hubble (relay + UI)");
+                    ui.checkbox(&mut state.cilium.ingress, "Ingress Controller");
+                    ui.checkbox(&mut state.cilium.mesh, "Clustermesh");
+                    if state.cilium.mesh {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("cluster id:");
+                            ui.add(
+                                egui::DragValue::new(&mut state.cilium.cluster_id).range(
+                                    kindboard_core::spec::MIN_CLUSTER_ID
+                                        ..=kindboard_core::spec::MAX_CLUSTER_ID,
+                                ),
+                            );
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("cluster name:");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut state.cilium.cluster_name)
+                                    .hint_text("lowercase, <= 32 chars")
+                                    .desired_width(220.0),
+                            );
+                        });
+                    }
+                }
+            });
 
         ui.add_space(8.0);
         ui.separator();
@@ -263,7 +277,7 @@ pub fn show(ctx: &egui::Context, state: &mut WizardState) -> WizardAction {
         let spec = state.to_spec();
         match validate(&spec) {
             Ok(()) => {
-                ui.label(RichText::new("Spec OK").color(theme::GREEN).size(12.0));
+                ui.label(RichText::new("Spec OK").color(theme::pal().green).size(12.0));
             }
             Err(err) => {
                 inline_error(ui, &err.to_string());

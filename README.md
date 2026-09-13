@@ -75,6 +75,17 @@ style, and persisting everything crash-safely.
   failed step reads exactly like the official tool text.
 - **k9s integration** — an **Open in k9s** button on every cluster card and
   tab launches k9s for that cluster in a new terminal.
+- **Three professional themes** — Dark, Light and High Contrast, switchable
+  from the top bar and persisted across restarts, all sharing the same card /
+  stroke / status design language with contrast-checked text on every button
+  and highlight.
+- **Fits any window size** — every view adapts from 1280×800 down to 640×480:
+  modals clamp and scroll, toolbars wrap, panels keep bounded widths, and the
+  topology diagram starts centered and auto-fits the dashboard (re-fitting on
+  resize until you pan or zoom manually).
+- **Dependency readiness on the dashboard** — the Overview shows a live
+  "Tools N/8" summary and surfaces missing critical tools (docker/kind) with a
+  one-click install right from the dashboard.
 - **Official tool logos** — the dependencies panel and buttons use the official
   project logos (kubectl uses the Kubernetes logo); tools without one
   (kubectx) get a monogram.
@@ -129,6 +140,16 @@ opt-in:
 | `--log-file <path>` | Also write timestamped log records to `<path>`; in `--detach` mode this defaults to `<data_dir>/kindboard/kindboard.log` |
 | `--screenshot <file.png>` | Capture one screenshot then exit (CI / headless, e.g. on Xvfb) |
 | `--screenshot-every <secs> [--screenshot-dir <dir>]` | Capture periodically into a directory, then exit |
+
+Dev/CI environment knobs for the screenshot harness (headless documentation
+captures):
+
+| Variable | Effect |
+|---|---|
+| `KINDBOARD_WINDOW_SIZE=WxH` | Override the initial window size (e.g. `640x480` to verify small frames) |
+| `KINDBOARD_OPEN_CLUSTER=<name>` | Auto-open a cluster tab once the first reconcile lands |
+| `KINDBOARD_OPEN_WIZARD=1` | Open the create wizard on the first frame |
+| `XDG_DATA_HOME=<dir>` | Point the state dir elsewhere; a `settings.json` with `{"theme":"light"}` renders that theme |
 
 **Troubleshooting recipe:** run the app from a terminal without flags to see
 all `warn`+ records on stderr; add `-v`/`-vv` for the full subprocess and
@@ -196,8 +217,18 @@ between every module).
 | [docs/dependency-install-matrix.md](docs/dependency-install-matrix.md) | Detection commands, package names, pinned binary downloads per tool |
 | [docs/howtos/install-kubectx.md](docs/howtos/install-kubectx.md) | **How-to with screenshots:** install kubectx from the Dependencies panel |
 | [docs/howtos/create-cni-clusters.md](docs/howtos/create-cni-clusters.md) | **How-to with screenshots:** flannel, calico and cilium clusters, end to end |
-| [docs/adrs/](docs/adrs/) | Architecture decision records (ADR-0008 … 0015) |
+| [docs/adrs/](docs/adrs/) | Architecture decision records (ADR-0008 … 0016) |
 | [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md) | Logo ownership, sources and trademark notes |
+
+## Website
+
+A self-contained static website lives in [`web/`](web/) — pure HTML/CSS/JS with
+no build step, no external assets, and relative paths only, so it can be
+uploaded as-is to any server or domain. It presents the project, features,
+architecture, CNI matrix and screenshots for people studying Kubernetes and
+DevOps. Open `web/index.html` locally or serve the folder with any static
+server. (The GitHub links in the header/footer are placeholders — point them
+at your repository before publishing.)
 
 ## License & attribution
 

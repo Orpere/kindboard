@@ -193,6 +193,28 @@ async fn run_loop(
                             emit(&tx, CoreEvent::DockerDaemon { state });
                         });
                     }
+                    CoreCommand::SetTheme { id } => {
+                        let tx = event_tx.clone();
+                        let worker_env = env.clone();
+                        tasks.spawn(async move {
+                            let result = worker_env
+                                .data_dir
+                                .load_settings()
+                                .map(|mut settings| {
+                                    settings.theme = Some(id);
+                                    settings
+                                })
+                                .and_then(|settings| worker_env.data_dir.save_settings(&settings));
+                            if let Err(err) = result {
+                                emit(
+                                    &tx,
+                                    CoreEvent::Notice {
+                                        message: format!("could not save theme: {err}"),
+                                    },
+                                );
+                            }
+                        });
+                    }
                     CoreCommand::InstallTool { id } => {
                         let token = op_token(&mut cancels, &format!("install:{id}"));
                         let tx = event_tx.clone();
@@ -540,7 +562,10 @@ async fn do_detect_all(event_tx: Sender<CoreEvent>) {
         let tx = event_tx.clone();
         tasks.push(tokio::spawn(async move {
             let result = core::detect(tool.id).await.map_err(|err| err.to_string());
-            emit(
+            // Per-tool outcomes are results, not progress: they must never
+            // be dropped under bus pressure or the UI shows stale data
+            // after a refresh (TRACE-013).
+            emit_important(
                 &tx,
                 CoreEvent::DetectedTool {
                     id: tool.id,

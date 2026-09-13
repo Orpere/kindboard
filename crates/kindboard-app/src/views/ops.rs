@@ -263,9 +263,9 @@ pub fn show(ctx: &egui::Context, panel: &mut OpPanel, actions: &mut Vec<CoreComm
                 ui.strong("Steps");
                 for step in &panel.steps {
                     let (marker, color) = match step.status {
-                        StepStatus::Running => ("\u{2026}", theme::AMBER),
-                        StepStatus::Done => ("\u{2713}", theme::GREEN),
-                        StepStatus::Failed => ("\u{2717}", theme::RED),
+                        StepStatus::Running => ("\u{2026}", theme::pal().amber),
+                        StepStatus::Done => ("\u{2713}", theme::pal().green),
+                        StepStatus::Failed => ("\u{2717}", theme::pal().red),
                     };
                     ui.horizontal(|ui| {
                         ui.label(
@@ -280,18 +280,20 @@ pub fn show(ctx: &egui::Context, panel: &mut OpPanel, actions: &mut Vec<CoreComm
                 ui.separator();
             }
 
-            // Output tail.
+            // Output tail (both axes: long streamed lines wrap instead of
+            // overflowing the window — R3).
             ui.strong("Output");
-            ScrollArea::vertical()
+            ScrollArea::both()
                 .stick_to_bottom(true)
                 .max_height(220.0)
                 .show(ui, |ui| {
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                     for line in &panel.output {
                         ui.label(
                             RichText::new(line)
                                 .monospace()
                                 .size(11.0)
-                                .color(theme::TEXT_DIM),
+                                .color(theme::pal().text_dim),
                         );
                     }
                     if panel.running() {
@@ -316,7 +318,7 @@ pub fn show(ctx: &egui::Context, panel: &mut OpPanel, actions: &mut Vec<CoreComm
                     }
                 }
                 Some(Ok(())) => {
-                    ui.label(RichText::new("Finished").color(theme::GREEN));
+                    ui.label(RichText::new("Finished").color(theme::pal().green));
                     if ui.button("Close").clicked() {
                         remove = true;
                     }
@@ -324,7 +326,7 @@ pub fn show(ctx: &egui::Context, panel: &mut OpPanel, actions: &mut Vec<CoreComm
                 Some(Err(err)) => {
                     ui.label(
                         RichText::new(format!("Failed: {err}"))
-                            .color(theme::RED)
+                            .color(theme::pal().red)
                             .size(12.0),
                     );
                     if ui.button("Close").clicked() {

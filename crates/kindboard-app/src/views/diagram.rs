@@ -22,7 +22,7 @@ use crate::theme;
 use crate::util::{time_of, truncate};
 
 /// Pan/zoom state of one cluster's diagram (persists across polls).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct DiagramState {
     /// Pan offset in screen pixels.
     pub offset: Vec2,
@@ -30,6 +30,13 @@ pub struct DiagramState {
     pub zoom: f32,
     /// Fit-to-view on the next frame.
     pub fit_next: bool,
+    /// `true` once the user manually panned/zoomed; while `false` the
+    /// diagram keeps itself fitted and centered automatically (startup,
+    /// window resizes, first real snapshot).
+    pub user_taken_over: bool,
+    /// Canvas size at the last fit; `Vec2::ZERO` = never fitted. Drives
+    /// the auto re-fit when the canvas size changes.
+    last_canvas: Vec2,
 }
 
 impl DiagramState {
@@ -39,7 +46,21 @@ impl DiagramState {
             offset: Vec2::ZERO,
             zoom: 1.0,
             fit_next: true,
+            user_taken_over: false,
+            last_canvas: Vec2::ZERO,
         }
+    }
+
+    /// Explicit "Fit to view": re-fit and resume auto-fit mode.
+    pub fn request_fit(&mut self) {
+        self.fit_next = true;
+        self.user_taken_over = false;
+    }
+}
+
+impl Default for DiagramState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -80,11 +101,11 @@ enum NodeStatus {
 impl NodeStatus {
     fn color(self) -> Color32 {
         match self {
-            NodeStatus::Ready => theme::GREEN,
-            NodeStatus::Pending => theme::AMBER,
-            NodeStatus::Failed => theme::RED,
-            NodeStatus::Succeeded => Color32::from_rgb(0x4f, 0x9d, 0xc9),
-            NodeStatus::Neutral => theme::TEXT_DIM,
+            NodeStatus::Ready => theme::pal().green,
+            NodeStatus::Pending => theme::pal().amber,
+            NodeStatus::Failed => theme::pal().red,
+            NodeStatus::Succeeded => theme::pal().succeeded,
+            NodeStatus::Neutral => theme::pal().text_dim,
         }
     }
 }
@@ -222,6 +243,7 @@ pub fn show(
     // --- interactions ----------------------------------------------------
     if response.dragged() {
         state.offset += response.drag_delta();
+        state.user_taken_over = true;
     }
     let pointer = response.hover_pos();
     let zoom_delta = ui.input(|i| i.zoom_delta());
@@ -232,6 +254,7 @@ pub fn show(
         // Keep the anchor point fixed under the pointer.
         state.offset = anchor.to_vec2() - (anchor.to_vec2() - state.offset - origin) * ratio;
         state.zoom = new_zoom;
+        state.user_taken_over = true;
     }
 
     // --- node list + geometry --------------------------------------------
@@ -246,9 +269,14 @@ pub fn show(
         ));
     }
 
-    if state.fit_next {
+    // Auto-fit: the graph must start centered and fitted to the dashboard
+    // (R3) — on the first real snapshot, and again whenever the canvas
+    // size changes (async window sizing, resizes), until the user pans or
+    // zooms manually.
+    if should_auto_fit(state, rect.size(), !rects.is_empty()) {
         fit_to_view(&rects, rect.size(), origin, state);
         state.fit_next = false;
+        state.last_canvas = rect.size();
     }
 
     // Recompute rects after a potential fit.
@@ -295,19 +323,22 @@ pub fn show(
         for (id, node_rect) in rects.iter().rev() {
             if node_rect.contains(pos) {
                 let label = tooltip_text(graph, id);
-                let galley =
-                    painter.layout_no_wrap(label, egui::FontId::proportional(12.0), Color32::WHITE);
+                let galley = painter.layout_no_wrap(
+                    label,
+                    egui::FontId::proportional(12.0),
+                    theme::pal().tooltip_text,
+                );
                 let pad = egui::vec2(8.0, 5.0);
                 let tip_rect =
                     Rect::from_min_size(pos + egui::vec2(12.0, 12.0), galley.size() + pad * 2.0);
                 painter.rect(
                     tip_rect,
                     CornerRadius::same(4),
-                    Color32::from_black_alpha(220),
-                    Stroke::new(1.0, theme::STROKE),
+                    theme::pal().tooltip_bg,
+                    Stroke::new(1.0, theme::pal().stroke),
                     egui::StrokeKind::Inside,
                 );
-                painter.galley(tip_rect.min + pad, galley, Color32::WHITE);
+                painter.galley(tip_rect.min + pad, galley, theme::pal().tooltip_text);
                 break;
             }
         }
@@ -319,7 +350,7 @@ pub fn show(
             Align2::CENTER_CENTER,
             "No topology data yet — fetch a snapshot (Ctrl+R)",
             egui::FontId::proportional(13.0),
-            theme::TEXT_DIM,
+            theme::pal().text_dim,
         );
     }
 
@@ -342,29 +373,29 @@ fn paint_node(painter: &egui::Painter, node: &ViewNode, rect: Rect, selected: bo
         match node.layout.kind {
             LayoutKind::Namespace => (
                 Color32::from_rgba_unmultiplied(
-                    theme::ACCENT.r(),
-                    theme::ACCENT.g(),
-                    theme::ACCENT.b(),
+                    theme::pal().accent.r(),
+                    theme::pal().accent.g(),
+                    theme::pal().accent.b(),
                     28,
                 ),
                 CornerRadius::same(6),
                 None,
             ),
-            LayoutKind::Workload => (theme::dim(color), CornerRadius::same(4), node.glyph),
-            LayoutKind::Pod => (theme::dim(color), CornerRadius::same(6), None),
+            LayoutKind::Workload => (theme::pal().dim(color), CornerRadius::same(4), node.glyph),
+            LayoutKind::Pod => (theme::pal().dim(color), CornerRadius::same(6), None),
             LayoutKind::Service => (
-                Color32::from_rgba_unmultiplied(0x5b, 0x8d, 0xb8, 40),
+                theme::pal().service_fill,
                 CornerRadius::same(13),
                 Some("svc"),
             ),
             LayoutKind::Ingress => (
-                Color32::from_rgba_unmultiplied(0x8d, 0x7a, 0xb8, 40),
+                theme::pal().ingress_fill,
                 CornerRadius::same(4),
                 Some("ing"),
             ),
         };
     let stroke = if selected {
-        Stroke::new(2.0, theme::ACCENT)
+        Stroke::new(2.0, theme::pal().accent)
     } else {
         Stroke::new(1.0, color)
     };
@@ -386,7 +417,7 @@ fn paint_node(painter: &egui::Painter, node: &ViewNode, rect: Rect, selected: bo
         Align2::CENTER_CENTER,
         label,
         egui::FontId::proportional(font_size),
-        Color32::from_rgb(0xd6, 0xe4, 0xee),
+        theme::pal().node_text,
     );
 }
 
@@ -416,6 +447,32 @@ fn tooltip_text(graph: &TopologyGraph, id: &str) -> String {
 }
 
 /// Fit all visible nodes into the canvas.
+/// Whether the diagram should auto-fit this frame.
+///
+/// Rules (R3 — "starts centered, fits the view"):
+/// - never fit an empty graph (the pending fit survives for the first real
+///   snapshot);
+/// - degenerate canvases (≤4px) never consume a fit — the fit survives
+///   until a real canvas exists (async window sizing);
+/// - an explicit `fit_next` request always fits;
+/// - without user interaction, fit when the canvas has never been fitted
+///   (first real snapshot) or when the canvas size changed (window resize).
+fn should_auto_fit(state: &DiagramState, canvas: Vec2, has_nodes: bool) -> bool {
+    if !has_nodes {
+        return false;
+    }
+    if canvas.x <= 4.0 || canvas.y <= 4.0 {
+        return false;
+    }
+    if state.fit_next {
+        return true;
+    }
+    if state.user_taken_over {
+        return false;
+    }
+    state.last_canvas == Vec2::ZERO || state.last_canvas != canvas
+}
+
 fn fit_to_view(rects: &[(String, Rect)], canvas: Vec2, origin: Vec2, state: &mut DiagramState) {
     if rects.is_empty() {
         state.zoom = 1.0;
@@ -545,24 +602,24 @@ fn paint_legend(painter: &egui::Painter, canvas: Rect, collapsed_count: usize) {
     let mut x = canvas.left() + 10.0;
     let y = canvas.bottom() - 14.0;
     let entries: [(&str, Color32); 5] = [
-        ("Ready/Running", theme::GREEN),
-        ("Pending", theme::AMBER),
-        ("Failed", theme::RED),
-        ("Unknown", theme::GREY),
-        ("edge: service -> workload", theme::TEXT_DIM),
+        ("Ready/Running", theme::pal().green),
+        ("Pending", theme::pal().amber),
+        ("Failed", theme::pal().red),
+        ("Unknown", theme::pal().grey),
+        ("edge: service -> workload", theme::pal().text_dim),
     ];
     for (label, color) in entries {
         painter.circle_filled(egui::pos2(x, y), 3.0, color);
         let galley = painter.layout_no_wrap(
             label.to_string(),
             egui::FontId::proportional(10.0),
-            theme::TEXT_DIM,
+            theme::pal().text_dim,
         );
         let galley_size = galley.size();
         painter.galley(
             egui::pos2(x + 7.0, y - galley_size.y / 2.0),
             galley,
-            theme::TEXT_DIM,
+            theme::pal().text_dim,
         );
         x += 7.0 + galley_size.x + 14.0;
         if x > canvas.right() - 60.0 {
@@ -571,15 +628,18 @@ fn paint_legend(painter: &egui::Painter, canvas: Rect, collapsed_count: usize) {
     }
     if collapsed_count > 0 {
         let note = format!("{collapsed_count} namespace(s) collapsed");
-        let galley =
-            painter.layout_no_wrap(note, egui::FontId::proportional(10.0), theme::TEXT_DIM);
+        let galley = painter.layout_no_wrap(
+            note,
+            egui::FontId::proportional(10.0),
+            theme::pal().text_dim,
+        );
         painter.galley(
             egui::pos2(
                 canvas.right() - galley.size().x - 10.0,
                 y - galley.size().y / 2.0,
             ),
             galley,
-            theme::TEXT_DIM,
+            theme::pal().text_dim,
         );
     }
 }
@@ -613,13 +673,13 @@ pub fn detail_panel(
     let Some(id) = selected else {
         ui.label(
             egui::RichText::new("Select a node in the diagram to inspect it")
-                .color(theme::TEXT_DIM),
+                .color(theme::pal().text_dim),
         );
         ui.add_space(4.0);
         ui.label(
             egui::RichText::new("Pod detail: phase, node, readiness and events. Workload detail: labels and selector.")
                 .size(11.0)
-                .color(theme::TEXT_DIM),
+                .color(theme::pal().text_dim),
         );
         return None;
     };
@@ -648,7 +708,7 @@ pub fn detail_panel(
                                 egui::RichText::new(
                                     "The control-plane node cannot be removed (kind requires exactly one).",
                                 )
-                                .color(theme::TEXT_DIM)
+                                .color(theme::pal().text_dim)
                                 .size(11.0),
                             );
                     }
@@ -656,7 +716,9 @@ pub fn detail_panel(
                         let enabled = can_delete_node;
                         let button = ui.add_enabled(
                             enabled,
-                            egui::Button::new(egui::RichText::new("Delete node").color(theme::RED)),
+                            egui::Button::new(
+                                egui::RichText::new("Delete node").color(theme::pal().red),
+                            ),
                         );
                         if button
                                 .on_hover_text(if enabled {
@@ -790,7 +852,7 @@ pub fn detail_panel(
     if events.is_empty() {
         ui.label(
             egui::RichText::new("no recent events for this object")
-                .color(theme::TEXT_DIM)
+                .color(theme::pal().text_dim)
                 .size(11.0),
         );
     }
@@ -803,7 +865,7 @@ pub fn detail_panel(
                 truncate(&event.message, 90)
             ))
             .size(11.0)
-            .color(theme::TEXT_DIM),
+            .color(theme::pal().text_dim),
         );
     }
 
@@ -815,7 +877,7 @@ fn label_map(ui: &mut egui::Ui, title: &str, map: &BTreeMap<String, String>) {
     if map.is_empty() {
         ui.label(
             egui::RichText::new("(none)")
-                .color(theme::TEXT_DIM)
+                .color(theme::pal().text_dim)
                 .size(11.0),
         );
         return;
@@ -824,7 +886,7 @@ fn label_map(ui: &mut egui::Ui, title: &str, map: &BTreeMap<String, String>) {
         ui.label(
             egui::RichText::new(format!("{key}: {value}"))
                 .size(11.0)
-                .color(theme::TEXT_DIM),
+                .color(theme::pal().text_dim),
         );
     }
 }
@@ -901,6 +963,42 @@ mod tests {
         fit_to_view(&rects, egui::vec2(600.0, 400.0), Vec2::ZERO, &mut state);
         assert!(state.zoom > MIN_ZOOM);
         assert!(state.zoom <= MAX_ZOOM);
+    }
+
+    #[test]
+    fn auto_fit_starts_centered_and_tracks_canvas() {
+        // Fresh state: the fit survives degenerate early frames (async WM
+        // sizing) and fires on the first real canvas.
+        let mut state = DiagramState::new();
+        assert!(!should_auto_fit(&state, egui::vec2(2.0, 2.0), true));
+        assert!(!should_auto_fit(&state, egui::vec2(2.0, 2.0), false));
+        assert!(should_auto_fit(&state, egui::vec2(800.0, 500.0), true));
+        // After a successful fit on a real canvas, no re-fit for the same
+        // size.
+        state.last_canvas = egui::vec2(800.0, 500.0);
+        state.fit_next = false;
+        assert!(!should_auto_fit(&state, egui::vec2(800.0, 500.0), true));
+        // Canvas resize re-fits while the user has not interacted.
+        assert!(should_auto_fit(&state, egui::vec2(640.0, 480.0), true));
+        // Once the user pans/zooms, auto-fit stops.
+        state.user_taken_over = true;
+        assert!(!should_auto_fit(&state, egui::vec2(640.0, 480.0), true));
+        // Explicit fit requests always win (Fit to view button).
+        state.fit_next = true;
+        assert!(should_auto_fit(&state, egui::vec2(640.0, 480.0), true));
+        // An empty graph never consumes a pending fit.
+        state.fit_next = true;
+        assert!(!should_auto_fit(&state, egui::vec2(800.0, 500.0), false));
+    }
+
+    #[test]
+    fn request_fit_resumes_auto_mode() {
+        let mut state = DiagramState::new();
+        state.user_taken_over = true;
+        state.fit_next = false;
+        state.request_fit();
+        assert!(state.fit_next);
+        assert!(!state.user_taken_over);
     }
 
     #[test]

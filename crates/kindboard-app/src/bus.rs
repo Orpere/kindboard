@@ -59,6 +59,11 @@ pub enum CoreCommand {
     DetectTools,
     /// Probe the docker daemon.
     CheckDockerDaemon,
+    /// Persist the selected theme id in settings.json.
+    SetTheme {
+        /// `"dark"` | `"light"` | `"high-contrast"`.
+        id: String,
+    },
     /// Install one tool (package manager first, binary fallback).
     InstallTool {
         /// Tool to install.

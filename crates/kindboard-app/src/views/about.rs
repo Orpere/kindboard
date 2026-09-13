@@ -91,7 +91,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool) -> bool {
                 ui.label(RichText::new("kindboard").size(22.0).strong());
                 ui.label(
                     RichText::new(format!("version {}", env!("CARGO_PKG_VERSION")))
-                        .color(theme::TEXT_DIM),
+                        .color(theme::pal().text_dim),
                 );
                 ui.add_space(10.0);
                 ui.label(
@@ -99,7 +99,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool) -> bool {
                         "Desktop manager for kind clusters: create, inspect and destroy \
                          local Kubernetes development clusters.",
                     )
-                    .color(theme::TEXT_DIM),
+                    .color(theme::pal().text_dim),
                 );
             });
             ui.add_space(12.0);
@@ -118,7 +118,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool) -> bool {
                      Tool icons are the official project logos (kubectl uses the Kubernetes \
                      logo; kubectx has none). Logos belong to their respective owners.",
                 )
-                .color(theme::TEXT_DIM)
+                .color(theme::pal().text_dim)
                 .size(11.0),
             );
             ui.add_space(10.0);

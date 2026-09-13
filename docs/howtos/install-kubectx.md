@@ -109,3 +109,13 @@ kindboard --screenshot-every 1 --screenshot-dir /tmp/seq/
 Rendering works headlessly with software GL:
 `WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1` on an Xvfb display. The screenshots
 in this guide were produced with those flags — pixel-perfect, no clicks.
+
+Extra knobs for themed / sized captures:
+
+```bash
+# A specific window size (verify small frames): KINDBOARD_WINDOW_SIZE=WxH
+# A specific theme: point XDG_DATA_HOME at a dir whose kindboard/settings.json
+#   contains {"remember_last_wizard":true,"poll_interval_secs":5,"theme":"light"}
+# Open the create wizard on the first frame:  KINDBOARD_OPEN_WIZARD=1
+# Open a cluster tab once the first reconcile lands: KINDBOARD_OPEN_CLUSTER=<name>
+```

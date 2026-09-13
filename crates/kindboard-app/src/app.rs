@@ -117,6 +117,9 @@ pub struct KindboardApp {
     banners: Vec<Banner>,
     /// Command bus is full (warning badge).
     bus_warning: bool,
+    /// Dev/CI: open this cluster tab once the first reconcile lands
+    /// (KINDBOARD_OPEN_CLUSTER=<name>).
+    auto_open: Option<String>,
 }
 
 impl KindboardApp {
@@ -125,8 +128,14 @@ impl KindboardApp {
         cc: &eframe::CreationContext<'_>,
         cmd: Sender<CoreCommand>,
         events: Receiver<CoreEvent>,
+        initial_theme: crate::theme::ThemeId,
     ) -> Self {
+        theme::set_index(initial_theme);
         theme::apply(&cc.egui_ctx);
+        // Dev/CI: KINDBOARD_OPEN_WIZARD=1 opens the create wizard on the
+        // first frame so the screenshot harness can capture it headlessly.
+        let wizard_open = std::env::var("KINDBOARD_OPEN_WIZARD").as_deref() == Ok("1");
+        let wizard = wizard_open.then(wizard::WizardState::fresh);
         let mut app = KindboardApp {
             cmd,
             events,
@@ -135,8 +144,8 @@ impl KindboardApp {
             active: ActiveTab::Overview,
             ops: HashMap::new(),
             op_gens: HashMap::new(),
-            wizard: None,
-            wizard_open: false,
+            wizard,
+            wizard_open,
             about_open: false,
             screenshot: None,
             screenshot_pending: false,
@@ -145,6 +154,9 @@ impl KindboardApp {
             last_capture: std::time::Instant::now(),
             banners: Vec::new(),
             bus_warning: false,
+            auto_open: std::env::var("KINDBOARD_OPEN_CLUSTER")
+                .ok()
+                .filter(|value| !value.is_empty()),
         };
         app.overview.loading = true;
         app.overview.deps.begin_detect();
@@ -262,6 +274,11 @@ impl KindboardApp {
                                     tab.record = Some(record.clone());
                                 }
                             }
+                        }
+                        // Dev/CI: auto-open a cluster tab once live names
+                        // are known (headless screenshot harness).
+                        if let Some(name) = self.auto_open.take() {
+                            self.open_tab(&name);
                         }
                     }
                     Err(err) => {
@@ -566,23 +583,23 @@ impl KindboardApp {
                 .is_some_and(|install| install.done.is_none())
     }
 
-    /// Top bar: brand, title, bus warning, About.
+    /// Top bar: brand, title, theme picker, bus warning, About.
     fn render_top_bar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top(egui::Id::new("top-bar")).show(ui, |ui| {
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 crate::icons::brand_mark(ui, 26.0);
                 ui.strong(egui::RichText::new("kindboard").size(16.0));
                 ui.label(
                     egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
-                        .color(theme::TEXT_DIM)
+                        .color(theme::pal().text_dim)
                         .size(11.0),
                 );
                 if self.bus_warning {
                     ui.separator();
                     ui.label(
                         egui::RichText::new("core busy - some requests may have been dropped")
-                            .color(theme::AMBER)
+                            .color(theme::pal().amber)
                             .size(11.0),
                     )
                     .on_hover_text("The command queue is full; retry the last action");
@@ -594,6 +611,20 @@ impl KindboardApp {
                         .clicked()
                     {
                         self.about_open = true;
+                    }
+                    let mut theme = theme::current();
+                    egui::ComboBox::from_id_salt("theme-picker")
+                        .selected_text(theme.label())
+                        .show_ui(ui, |ui| {
+                            for id in theme::ThemeId::ALL {
+                                ui.selectable_value(&mut theme, id, id.label());
+                            }
+                        });
+                    if theme != theme::current() {
+                        theme::set_theme(ui.ctx(), theme);
+                        self.issue(CoreCommand::SetTheme {
+                            id: theme.id().to_string(),
+                        });
                     }
                 });
             });
@@ -610,12 +641,12 @@ impl KindboardApp {
         egui::Panel::top(egui::Id::new("banners")).show(ui, |ui| {
             for (index, banner) in self.banners.iter().enumerate() {
                 let color = if banner.is_error {
-                    theme::RED
+                    theme::pal().red
                 } else {
-                    theme::ACCENT
+                    theme::pal().accent
                 };
                 egui::Frame::new()
-                    .fill(theme::dim(color))
+                    .fill(theme::pal().dim(color))
                     .stroke(egui::Stroke::new(1.0, color))
                     .corner_radius(egui::CornerRadius::same(4))
                     .inner_margin(egui::Margin::same(6))
@@ -640,10 +671,16 @@ impl KindboardApp {
         }
     }
 
-    /// Tab bar: Overview + open cluster tabs (closable).
+    /// Tab bar: Overview + open cluster tabs (closable). Tabs scroll
+    /// horizontally when the window is narrower than the tab strip.
     fn render_tab_bar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top(egui::Id::new("tab-bar")).show(ui, |ui| {
-            ui.horizontal(|ui| {
+            egui::ScrollArea::horizontal()
+                .id_salt("tabs")
+                .auto_shrink([false, true])
+                .max_height(40.0)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
                 let overview_selected = matches!(self.active, ActiveTab::Overview);
                 if ui
                     .selectable_label(overview_selected, "Overview")
@@ -662,7 +699,7 @@ impl KindboardApp {
                         let label = if selected {
                             RichText::new(format!("  {}  ", tab.name))
                                 .strong()
-                                .color(theme::ON_ACCENT)
+                                .color(theme::pal().on_accent)
                         } else {
                             RichText::new(format!("  {}  ", tab.name))
                         };
@@ -684,7 +721,8 @@ impl KindboardApp {
                 if let Some(name) = close {
                     self.close_tab(&name);
                 }
-            });
+                    });
+                });
         });
     }
 
@@ -700,7 +738,9 @@ impl KindboardApp {
                     // scope).
                     egui::Panel::right(egui::Id::new("overview-deps"))
                         .resizable(true)
-                        .default_size(380.0)
+                        .default_size(320.0)
+                        .min_size(240.0)
+                        .max_size(480.0)
                         .show(ui, |ui| {
                             let mut actions = Vec::new();
                             egui::ScrollArea::vertical()
@@ -910,17 +950,25 @@ impl KindboardApp {
     fn watch_detect(&mut self, ctx: &egui::Context) {
         if self.overview.deps.detecting {
             ctx.request_repaint_after(DETECT_TICK);
-            if self.overview.deps.detect_stalled(DETECT_WATCHDOG)
-                && self.overview.deps.detect_retries < DETECT_MAX_RETRIES
-            {
-                self.overview.deps.detect_retries += 1;
-                self.overview.deps.begin_detect();
-                log::warn!(
-                    "tool detection stalled; re-running (attempt {}/{})",
-                    self.overview.deps.detect_retries,
-                    DETECT_MAX_RETRIES
-                );
-                self.issue(CoreCommand::DetectTools);
+            if self.overview.deps.detect_stalled(DETECT_WATCHDOG) {
+                if self.overview.deps.detect_retries < DETECT_MAX_RETRIES {
+                    self.overview.deps.detect_retries += 1;
+                    self.overview.deps.begin_detect();
+                    log::warn!(
+                        "tool detection stalled; re-running (attempt {}/{})",
+                        self.overview.deps.detect_retries,
+                        DETECT_MAX_RETRIES
+                    );
+                    self.issue(CoreCommand::DetectTools);
+                } else {
+                    // Budget exhausted: release the UI instead of leaving
+                    // Refresh disabled forever — the user can retry
+                    // manually at any time (TRACE-013).
+                    log::error!("tool detection stalled repeatedly; releasing the UI");
+                    self.overview.deps.detecting = false;
+                    self.overview.deps.detect_started = None;
+                    self.overview.deps.detect_retries = 0;
+                }
             }
         }
     }

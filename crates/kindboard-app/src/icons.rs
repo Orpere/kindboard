@@ -149,7 +149,7 @@ pub fn brand_mark(ui: &mut Ui, size: f32) {
     painter.rect(
         rect,
         CornerRadius::same(6),
-        crate::theme::ACCENT,
+        crate::theme::pal().accent,
         egui::Stroke::NONE,
         egui::StrokeKind::Inside,
     );

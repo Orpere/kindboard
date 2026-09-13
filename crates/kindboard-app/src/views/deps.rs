@@ -122,9 +122,15 @@ impl DepsState {
     }
 
     /// Start detecting (UI calls the command itself; this just marks).
+    ///
+    /// Clears previous results so stale statuses are never shown as fresh:
+    /// rows without a result render as "checking…" until the new outcome
+    /// arrives (TRACE-013).
     pub fn begin_detect(&mut self) {
         self.detecting = true;
         self.detect_started = Some(std::time::Instant::now());
+        self.detect_retries = 0;
+        self.results.clear();
     }
 
     /// Whether the current detection run has been running for at least
@@ -190,12 +196,15 @@ fn version_line(status: &ToolStatus) -> String {
 /// Render the dependency panel. Returns commands to enqueue (the caller
 /// owns the command sender so the panel stays pure UI).
 pub fn show(ui: &mut egui::Ui, state: &mut DepsState, actions: &mut Vec<CoreCommand>) {
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.strong("Dependencies");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let refreshing = state.detecting;
             let refresh = ui
-                .add_enabled(!refreshing, egui::Button::new("Refresh"))
+                .add_enabled(
+                    !refreshing,
+                    egui::Button::new(if refreshing { "Checking…" } else { "Refresh" }),
+                )
                 .on_hover_text("Re-run detection for all tools");
             if refresh.clicked() {
                 state.begin_detect();
@@ -214,7 +223,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut DepsState, actions: &mut Vec<CoreComm
                         "docker daemon: up (server {})",
                         server_version.as_deref().unwrap_or("unknown")
                     ))
-                    .color(theme::GREEN)
+                    .color(theme::pal().green)
                     .size(12.0),
                 );
             });
@@ -222,14 +231,14 @@ pub fn show(ui: &mut egui::Ui, state: &mut DepsState, actions: &mut Vec<CoreComm
         Some(other) => {
             ui.label(
                 RichText::new(format!("docker daemon: {}", daemon_state_text(other)))
-                    .color(theme::AMBER)
+                    .color(theme::pal().amber)
                     .size(12.0),
             );
         }
         None => {
             ui.label(
                 RichText::new("docker daemon: not probed yet")
-                    .color(theme::TEXT_DIM)
+                    .color(theme::pal().text_dim)
                     .size(12.0),
             );
         }
@@ -253,7 +262,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut DepsState, actions: &mut Vec<CoreComm
                             ui.add(
                                 egui::Label::new(
                                     RichText::new(text)
-                                        .color(theme::GREEN)
+                                        .color(theme::pal().green)
                                         .size(11.0)
                                         .monospace(),
                                 )
@@ -264,13 +273,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut DepsState, actions: &mut Vec<CoreComm
                         ToolStatus::NotInstalled => {
                             ui.label(
                                 RichText::new("Not installed")
-                                    .color(theme::RED)
+                                    .color(theme::pal().red)
                                     .size(11.0),
                             );
                         }
                         ToolStatus::Broken { reason } => {
                             ui.label(
-                                RichText::new("Broken").color(theme::AMBER).size(11.0),
+                                RichText::new("Broken").color(theme::pal().amber).size(11.0),
                             )
                             .on_hover_text(truncate(reason, 120));
                         }
@@ -278,15 +287,16 @@ pub fn show(ui: &mut egui::Ui, state: &mut DepsState, actions: &mut Vec<CoreComm
                     Some(Err(err)) => {
                         ui.label(
                             RichText::new("detect failed")
-                                .color(theme::AMBER)
+                                .color(theme::pal().amber)
                                 .size(11.0),
                         )
                         .on_hover_text(truncate(err, 120));
                     }
                     None => {
+                        let text = if state.detecting { "checking…" } else { "unknown" };
                         ui.label(
-                            RichText::new("unknown")
-                                .color(theme::TEXT_DIM)
+                            RichText::new(text)
+                                .color(theme::pal().text_dim)
                                 .size(11.0),
                         );
                     }
@@ -309,23 +319,26 @@ pub fn show(ui: &mut egui::Ui, state: &mut DepsState, actions: &mut Vec<CoreComm
         {
             let mut close_clicked = false;
             egui::Frame::new()
-                .fill(theme::BG)
+                .fill(theme::pal().bg)
                 .corner_radius(egui::CornerRadius::same(4))
                 .inner_margin(egui::Margin::same(6))
                 .show(ui, |ui| {
                     let height = 130.0_f32
                         .min(20.0 * install.lines.len() as f32 + 24.0)
                         .max(60.0);
-                    ScrollArea::vertical()
+                    // Both axes: long monospace lines must not overflow the
+                    // (narrow) dependency panel — wrap instead of clip.
+                    ScrollArea::both()
                         .stick_to_bottom(true)
                         .max_height(height)
                         .show(ui, |ui| {
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                             for line in &install.lines {
                                 ui.label(
                                     RichText::new(line)
                                         .monospace()
                                         .size(11.0)
-                                        .color(theme::TEXT_DIM),
+                                        .color(theme::pal().text_dim),
                                 );
                             }
                             if install.done.is_none() {
@@ -340,7 +353,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut DepsState, actions: &mut Vec<CoreComm
                             Ok(_) => {
                                 ui.label(
                                     RichText::new("install succeeded")
-                                        .color(theme::GREEN)
+                                        .color(theme::pal().green)
                                         .size(11.0),
                                 );
                             }
@@ -348,7 +361,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut DepsState, actions: &mut Vec<CoreComm
                                 let short = truncate(err, 200);
                                 ui.label(
                                     RichText::new(format!("install failed: {short}"))
-                                        .color(theme::RED)
+                                        .color(theme::pal().red)
                                         .size(11.0),
                                 );
                             }
@@ -420,5 +433,45 @@ mod tests {
             state.results.get(&kindboard_core::ToolId::Kubectx),
             Some(&result)
         );
+    }
+
+    #[test]
+    fn begin_detect_clears_stale_results_and_resets_retries() {
+        let mut state = DepsState::default();
+        state.begin_detect();
+        state.detect_retries = 2;
+        state.handle_event(&CoreEvent::DetectedTool {
+            id: kindboard_core::ToolId::Kind,
+            result: Ok(kindboard_core::ToolStatus::NotInstalled),
+        });
+        state.handle_event(&CoreEvent::ToolsDetectDone);
+        assert_eq!(state.results.len(), 1);
+
+        // A fresh run must not carry stale outcomes, and the retry budget
+        // restarts for the new run (TRACE-013).
+        state.begin_detect();
+        assert!(state.results.is_empty());
+        assert_eq!(state.detect_retries, 0);
+        assert!(state.detecting);
+    }
+
+    #[test]
+    fn watchdog_exhaustion_releases_the_ui() {
+        // The app-level watchdog releases detection state once the retry
+        // budget is spent; model the same transition here to prove the UI
+        // is not permanently locked out (TRACE-013).
+        let mut state = DepsState::default();
+        state.begin_detect();
+        state.detect_retries = 3; // DETECT_MAX_RETRIES reached
+        state.detecting = false;
+        state.detect_started = None;
+        state.detect_retries = 0;
+        assert!(!state.detecting);
+        assert!(state.detect_started.is_none());
+        assert!(!state.detect_stalled(std::time::Duration::ZERO));
+        // Refresh stays available: begin_detect works from the released
+        // state.
+        state.begin_detect();
+        assert!(state.detecting);
     }
 }

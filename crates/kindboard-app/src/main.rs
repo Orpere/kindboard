@@ -414,10 +414,20 @@ fn main() {
 
     // Window icon (tolerated when assets/icons/kindboard-64.png is absent).
     let icon: Option<Arc<egui::viewport::IconData>> = kindboard_app::icons::load_window_icon();
+    // Dev/CI: override the initial window size via KINDBOARD_WINDOW_SIZE
+    // ("WIDTHxHEIGHT") so the screenshot harness can verify every view at
+    // any frame size (R3). Unset → the 1280x800 default.
+    let window_size = std::env::var("KINDBOARD_WINDOW_SIZE")
+        .ok()
+        .and_then(|value| {
+            let (w, h) = value.split_once('x')?;
+            Some(egui::vec2(w.parse().ok()?, h.parse().ok()?))
+        })
+        .unwrap_or(egui::vec2(1280.0, 800.0));
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("kindboard")
-        .with_inner_size([1280.0, 800.0])
-        .with_min_inner_size([960.0, 600.0])
+        .with_inner_size(window_size)
+        .with_min_inner_size([640.0, 480.0])
         .with_resizable(true);
     if let Some(icon) = icon {
         viewport = viewport.with_icon(icon);
@@ -430,11 +440,15 @@ fn main() {
 
     let cmd_tx = buses.cmd_tx;
     let event_rx = buses.event_rx;
+    // Read the persisted theme once, synchronously, before the window
+    // exists — no flash of the default theme for light-theme users, and
+    // the UI thread never blocks after startup.
+    let initial_theme = kindboard_app::theme::load_persisted_theme();
     let run_result = eframe::run_native(
         "kindboard",
         options,
         Box::new(move |cc| {
-            let mut app = KindboardApp::new(cc, cmd_tx, event_rx);
+            let mut app = KindboardApp::new(cc, cmd_tx, event_rx, initial_theme);
             if let Some(mode) = screenshot {
                 app = app.with_screenshot(match mode {
                     ScreenshotArgs::Once { path, delay_secs } => {

@@ -246,33 +246,34 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
         ui.horizontal(|ui| {
             ui.strong(RichText::new(&tab.name).size(16.0));
             match &tab.topo {
-                Some(_) => pill(ui, "running", theme::GREEN),
-                None => pill(ui, "topology unknown", theme::GREY),
+                Some(_) => pill(ui, "running", theme::pal().green),
+                None => pill(ui, "topology unknown", theme::pal().grey),
             }
             if let Some(record) = &tab.record {
                 ui.label(
                     RichText::new(format!("k8s {}", record.spec.k8s_version.as_str()))
-                        .color(theme::TEXT_DIM),
+                        .color(theme::pal().text_dim),
                 );
                 ui.label(
-                    RichText::new(format!("{:?} CNI", record.spec.cni)).color(theme::TEXT_DIM),
+                    RichText::new(format!("{:?} CNI", record.spec.cni))
+                        .color(theme::pal().text_dim),
                 );
             } else {
-                pill(ui, "adopted", theme::GREY);
+                pill(ui, "adopted", theme::pal().grey);
             }
             // Kubeconfig context state.
             match tab.context_state {
                 Some(ContextStatus::Current) => {
-                    pill(ui, "context current", theme::GREEN);
+                    pill(ui, "context current", theme::pal().green);
                 }
                 Some(ContextStatus::Present) => {
-                    pill(ui, "context present", theme::AMBER);
+                    pill(ui, "context present", theme::pal().amber);
                 }
                 Some(ContextStatus::Absent) => {
-                    pill(ui, "context absent", theme::RED);
+                    pill(ui, "context absent", theme::pal().red);
                 }
                 None => {
-                    pill(ui, "context unknown", theme::GREY);
+                    pill(ui, "context unknown", theme::pal().grey);
                 }
             }
             if let Some(result) = &tab.context_result {
@@ -280,14 +281,14 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
                     Ok(()) => {
                         ui.label(
                             RichText::new("kubeconfig exported")
-                                .color(theme::GREEN)
+                                .color(theme::pal().green)
                                 .size(11.0),
                         );
                     }
                     Err(err) => {
                         ui.label(
                             RichText::new(format!("export failed: {err}"))
-                                .color(theme::RED)
+                                .color(theme::pal().red)
                                 .size(11.0),
                         );
                     }
@@ -363,7 +364,7 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add(egui::Button::new(
-                        RichText::new("Destroy").color(theme::RED),
+                        RichText::new("Destroy").color(theme::pal().red),
                     ))
                     .on_hover_text("Destroy this cluster (confirmation required)")
                     .clicked()
@@ -380,7 +381,9 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
     // ---- node list (left) ------------------------------------------------
     egui::Panel::left(egui::Id::new(("cluster-nodes", tab.name.clone())))
         .resizable(true)
-        .default_size(190.0)
+        .default_size(180.0)
+        .min_size(150.0)
+        .max_size(260.0)
         .show(ui, |ui| {
             ui.strong("Nodes");
             ui.separator();
@@ -389,7 +392,7 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
                     if graph.nodes.is_empty() {
                         ui.label(
                             RichText::new("no node data yet")
-                                .color(theme::TEXT_DIM)
+                                .color(theme::pal().text_dim)
                                 .size(11.0),
                         );
                     }
@@ -400,9 +403,9 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
                             status_dot(
                                 ui,
                                 if node.ready {
-                                    theme::GREEN
+                                    theme::pal().green
                                 } else {
-                                    theme::AMBER
+                                    theme::pal().amber
                                 },
                             );
                             if ui
@@ -415,8 +418,8 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| match node.role {
-                                    NodeRole::ControlPlane => pill(ui, "CP", theme::ACCENT),
-                                    NodeRole::Worker => pill(ui, "worker", theme::TEXT_DIM),
+                                    NodeRole::ControlPlane => pill(ui, "CP", theme::pal().accent),
+                                    NodeRole::Worker => pill(ui, "worker", theme::pal().text_dim),
                                 },
                             );
                         });
@@ -425,7 +428,7 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
                 None => {
                     ui.label(
                         RichText::new("topology not loaded")
-                            .color(theme::TEXT_DIM)
+                            .color(theme::pal().text_dim)
                             .size(11.0),
                     );
                 }
@@ -435,7 +438,9 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
     // ---- detail panel (right) --------------------------------------------
     egui::Panel::right(egui::Id::new(("cluster-detail", tab.name.clone())))
         .resizable(true)
-        .default_size(290.0)
+        .default_size(280.0)
+        .min_size(200.0)
+        .max_size(360.0)
         .show(ui, |ui| {
             ui.strong("Details");
             ui.separator();
@@ -453,7 +458,7 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
                 None => {
                     ui.label(
                         RichText::new("topology not loaded")
-                            .color(theme::TEXT_DIM)
+                            .color(theme::pal().text_dim)
                             .size(11.0),
                     );
                 }
@@ -469,7 +474,9 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
     // ---- logs (bottom) ----------------------------------------------------
     egui::Panel::bottom(egui::Id::new(("cluster-logs", tab.name.clone())))
         .resizable(true)
-        .default_size(190.0)
+        .default_size(180.0)
+        .min_size(120.0)
+        .max_size(320.0)
         .show(ui, |ui| {
             ui.add_space(4.0);
             logs_section(ui, tab, &mut cmds);
@@ -477,8 +484,8 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
 
     // ---- topology diagram (center) ---------------------------------------
     egui::CentralPanel::default().show(ui, |ui| {
-        // Toolbar.
-        ui.horizontal(|ui| {
+        // Toolbar (wraps on narrow windows instead of clipping — R3).
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .button("Refresh now")
                 .on_hover_text("Fetch a topology snapshot (Ctrl+R)")
@@ -565,7 +572,7 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
                 .on_hover_text("Reset zoom and center the diagram")
                 .clicked()
             {
-                tab.diagram.fit_next = true;
+                tab.diagram.request_fit();
             }
             if tab.topo_loading {
                 ui.spinner();
@@ -575,16 +582,16 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
         // Error banner + retry (never a blank pane).
         if let Some(error) = &tab.topo_error {
             egui::Frame::new()
-                .fill(theme::dim(theme::RED))
-                .stroke(egui::Stroke::new(1.0, theme::RED))
+                .fill(theme::pal().dim(theme::pal().red))
+                .stroke(egui::Stroke::new(1.0, theme::pal().red))
                 .corner_radius(egui::CornerRadius::same(4))
                 .inner_margin(egui::Margin::same(8))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("!").color(theme::RED).strong());
+                        ui.label(RichText::new("!").color(theme::pal().red).strong());
                         ui.label(
                             RichText::new(format!("Topology fetch failed: {error}"))
-                                .color(theme::RED),
+                                .color(theme::pal().red),
                         );
                         if ui.button("Retry").clicked() {
                             tab.topo_loading = true;
@@ -629,7 +636,7 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
                         "No topology data yet — use Refresh now"
                     },
                     egui::FontId::proportional(13.0),
-                    theme::TEXT_DIM,
+                    theme::pal().text_dim,
                 );
             }
             None => {
@@ -641,7 +648,7 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
                     egui::Align2::CENTER_CENTER,
                     "Topology unavailable",
                     egui::FontId::proportional(13.0),
-                    theme::TEXT_DIM,
+                    theme::pal().text_dim,
                 );
             }
         }
@@ -766,7 +773,7 @@ fn logs_section(ui: &mut egui::Ui, tab: &mut ClusterTab, cmds: &mut Vec<TabCmd>)
             _ => {
                 ui.label(
                     RichText::new("(topology needed for the picker)")
-                        .color(theme::TEXT_DIM)
+                        .color(theme::pal().text_dim)
                         .size(11.0),
                 );
             }
@@ -855,14 +862,14 @@ fn logs_section(ui: &mut egui::Ui, tab: &mut ClusterTab, cmds: &mut Vec<TabCmd>)
                 Ok(()) => {
                     ui.label(
                         RichText::new("stream ended")
-                            .color(theme::TEXT_DIM)
+                            .color(theme::pal().text_dim)
                             .size(11.0),
                     );
                 }
                 Err(err) => {
                     ui.label(
                         RichText::new(format!("log error: {err}"))
-                            .color(theme::RED)
+                            .color(theme::pal().red)
                             .size(11.0),
                     );
                 }
@@ -877,7 +884,7 @@ fn logs_section(ui: &mut egui::Ui, tab: &mut ClusterTab, cmds: &mut Vec<TabCmd>)
                 "showing the last {} lines (older lines dropped)",
                 tab.logs.ring.capacity()
             ))
-            .color(theme::AMBER)
+            .color(theme::pal().amber)
             .size(11.0),
         );
     }
@@ -893,7 +900,7 @@ fn logs_section(ui: &mut egui::Ui, tab: &mut ClusterTab, cmds: &mut Vec<TabCmd>)
             if lines.is_empty() {
                 ui.label(
                     RichText::new("no log output yet")
-                        .color(theme::TEXT_DIM)
+                        .color(theme::pal().text_dim)
                         .monospace()
                         .size(11.0),
                 );
@@ -901,7 +908,7 @@ fn logs_section(ui: &mut egui::Ui, tab: &mut ClusterTab, cmds: &mut Vec<TabCmd>)
             for line in lines {
                 ui.label(
                     RichText::new(line)
-                        .color(theme::TEXT_DIM)
+                        .color(theme::pal().text_dim)
                         .monospace()
                         .size(11.0),
                 );
@@ -965,10 +972,10 @@ fn show_confirms(ui: &mut egui::Ui, tab: &mut ClusterTab, cmds: &mut Vec<TabCmd>
         | ConfirmAction::DeleteNode { typed, .. } => typed.clone(),
     };
     let modal = Modal::new(egui::Id::new("tab-confirm")).show(ui.ctx(), |ui| {
-        ui.set_width(430.0);
+        ui.set_width(ui.available_width().min(430.0));
         ui.heading(title);
         ui.add_space(4.0);
-        ui.label(RichText::new(body).color(theme::RED));
+        ui.label(RichText::new(body).color(theme::pal().red));
         ui.add_space(6.0);
         ui.label("Type the cluster name to confirm:");
         ui.label(RichText::new(&tab.name).strong().monospace());
@@ -976,7 +983,7 @@ fn show_confirms(ui: &mut egui::Ui, tab: &mut ClusterTab, cmds: &mut Vec<TabCmd>
         ui.add(
             egui::TextEdit::singleline(&mut typed)
                 .hint_text(&tab.name)
-                .desired_width(390.0),
+                .desired_width(f32::INFINITY),
         );
         ui.add_space(8.0);
         let matches = typed.trim() == tab.name;
@@ -987,14 +994,20 @@ fn show_confirms(ui: &mut egui::Ui, tab: &mut ClusterTab, cmds: &mut Vec<TabCmd>
                 ConfirmAction::Recreate { .. } => "Recreate",
             };
             let fill = match action {
-                ConfirmAction::Destroy { .. } | ConfirmAction::DeleteNode { .. } => theme::RED,
-                ConfirmAction::Recreate { .. } => theme::AMBER,
+                ConfirmAction::Destroy { .. } | ConfirmAction::DeleteNode { .. } => {
+                    theme::pal().red
+                }
+                ConfirmAction::Recreate { .. } => theme::pal().amber,
             };
             let button = ui.add_enabled(
                 matches,
-                egui::Button::new(RichText::new(label).strong())
-                    .fill(fill)
-                    .min_size(egui::vec2(130.0, 30.0)),
+                egui::Button::new(
+                    RichText::new(label)
+                        .strong()
+                        .color(crate::util::on_fill(fill)),
+                )
+                .fill(fill)
+                .min_size(egui::vec2(130.0, 30.0)),
             );
             if button.on_hover_text("Confirm").clicked() {
                 confirmed = true;
@@ -1006,7 +1019,7 @@ fn show_confirms(ui: &mut egui::Ui, tab: &mut ClusterTab, cmds: &mut Vec<TabCmd>
         if !matches && !typed.is_empty() {
             ui.label(
                 RichText::new("the typed name does not match")
-                    .color(theme::RED)
+                    .color(theme::pal().red)
                     .size(11.0),
             );
         }

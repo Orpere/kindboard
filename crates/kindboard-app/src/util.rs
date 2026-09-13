@@ -10,7 +10,7 @@ use crate::theme;
 /// Draw a rounded "pill" label: colored dot + text on a dim background of
 /// the same hue.
 pub fn pill(ui: &mut Ui, text: impl Into<String>, color: Color32) {
-    let dim = theme::dim(color);
+    let dim = theme::pal().dim(color);
     let padding = egui::vec2(8.0, 3.0);
     let galley = ui
         .painter()
@@ -40,14 +40,29 @@ pub fn status_dot(ui: &mut Ui, color: Color32) {
     ui.painter().circle_filled(rect.center(), 5.0, color);
 }
 
+/// Text color guaranteed legible on a given opaque fill in every theme
+/// (R8): black on bright fills, white on dark fills, by relative luminance
+/// (ITU-R BT.709). Pair this with every explicitly filled button.
+#[must_use]
+pub fn on_fill(color: Color32) -> Color32 {
+    let luminance = 0.2126 * f32::from(color.r())
+        + 0.7152 * f32::from(color.g())
+        + 0.0722 * f32::from(color.b());
+    if luminance > 150.0 {
+        Color32::BLACK
+    } else {
+        Color32::WHITE
+    }
+}
+
 /// Status color of a pod phase (contracts §5 palette).
 pub fn pod_phase_color(phase: PodPhase) -> Color32 {
     match phase {
-        PodPhase::Running => theme::GREEN,
-        PodPhase::Pending => theme::AMBER,
-        PodPhase::Succeeded => Color32::from_rgb(0x4f, 0x9d, 0xc9),
-        PodPhase::Failed => theme::RED,
-        PodPhase::Unknown => theme::GREY,
+        PodPhase::Running => theme::pal().green,
+        PodPhase::Pending => theme::pal().amber,
+        PodPhase::Succeeded => theme::pal().succeeded,
+        PodPhase::Failed => theme::pal().red,
+        PodPhase::Unknown => theme::pal().grey,
     }
 }
 
@@ -100,7 +115,7 @@ pub fn inline_error(ui: &mut Ui, message: &str) {
     ui.add_space(2.0);
     ui.label(
         RichText::new(format!("! {message}"))
-            .color(theme::RED)
+            .color(theme::pal().red)
             .size(12.0),
     );
     ui.add_space(2.0);
@@ -109,6 +124,10 @@ pub fn inline_error(ui: &mut Ui, message: &str) {
 /// Show an inline success/notice line.
 pub fn inline_note(ui: &mut Ui, message: &str) {
     ui.add_space(2.0);
-    ui.label(RichText::new(message).color(theme::TEXT_DIM).size(12.0));
+    ui.label(
+        RichText::new(message)
+            .color(theme::pal().text_dim)
+            .size(12.0),
+    );
     ui.add_space(2.0);
 }
