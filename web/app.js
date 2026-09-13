@@ -78,4 +78,40 @@
       if (event.key === "Escape" && lightbox.classList.contains("open")) close();
     });
   }
+
+  // Night / light theme toggle.
+  var themeToggle = document.getElementById("theme-toggle");
+  var metaTheme = document.querySelector('meta[name="theme-color"]');
+  function applyTheme(theme, persist) {
+    document.documentElement.setAttribute("data-theme", theme);
+    if (metaTheme) metaTheme.setAttribute("content", theme === "light" ? "#f5f7fa" : "#12161c");
+    if (themeToggle) {
+      var light = theme === "light";
+      themeToggle.setAttribute("aria-pressed", light ? "true" : "false");
+      themeToggle.setAttribute("aria-label", light ? "Switch to night theme" : "Switch to light theme");
+      themeToggle.setAttribute("title", light ? "Switch to night theme" : "Switch to light theme");
+    }
+    if (persist) {
+      try { localStorage.setItem("kb-theme", theme); } catch (e) {}
+    }
+  }
+  var currentTheme = document.documentElement.getAttribute("data-theme") || "dark";
+  applyTheme(currentTheme === "light" ? "light" : "dark", false);
+  if (themeToggle) {
+    themeToggle.addEventListener("click", function () {
+      var theme = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
+      applyTheme(theme, true);
+      document.dispatchEvent(new CustomEvent("kb-theme-change", { detail: { theme: theme } }));
+    });
+  }
+
+  // Offline support: register the service worker on http(s) hosts.
+  // file:// has no service worker support, but the site is already
+  // fully self-contained there (all assets are local files).
+  window.addEventListener("load", function () {
+    if ("serviceWorker" in navigator && location.protocol !== "file:") {
+      var swUrl = new URL("sw.js", document.baseURI).href;
+      navigator.serviceWorker.register(swUrl).catch(function () {});
+    }
+  });
 })();

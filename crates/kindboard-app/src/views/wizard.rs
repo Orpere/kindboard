@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 
 use eframe::egui::{self, Modal, RichText};
 use kindboard_core::{
-    CiliumOptions, ClusterSpec, Cni, IngressController, KubernetesVersion, PortMapping, Protocol,
-    validate, validate_name,
+    CiliumOptions, ClusterSpec, Cni, CoreError, IngressController, KubernetesVersion, PortMapping,
+    Protocol, validate, validate_name,
 };
 
 use crate::theme;
@@ -24,6 +24,10 @@ pub struct WizardState {
     pub worker_count: u32,
     pub ingress: Option<IngressController>,
     pub cilium: CiliumOptions,
+    /// The user interacted with the form (typed/clicked). Live validation
+    /// only appears after this: a freshly opened wizard shows a neutral
+    /// hint instead of "cluster name is empty".
+    pub touched: bool,
 }
 
 impl WizardState {
@@ -38,6 +42,7 @@ impl WizardState {
             worker_count: 0,
             ingress: None,
             cilium: CiliumOptions::default(),
+            touched: false,
         }
     }
 
@@ -52,6 +57,8 @@ impl WizardState {
             worker_count: spec.worker_count,
             ingress: spec.ingress,
             cilium: spec.cilium.clone().unwrap_or_default(),
+            // Recreating an existing (valid) record: validation starts live.
+            touched: true,
         }
     }
 
@@ -108,6 +115,29 @@ pub enum WizardAction {
     Create(ClusterSpec),
     /// User cancelled.
     Cancel,
+}
+
+/// What the validation line shows under the form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WizardValidation {
+    /// Fresh form: neutral hint, no live validation yet.
+    Hint,
+    /// The spec is valid.
+    Ok,
+    /// The spec is invalid; carry the core error message.
+    Error(String),
+}
+
+/// Pure status mapping: untouched forms show a hint, touched forms show the
+/// validation result (core is the single source of truth for the message).
+fn validation_status(result: &Result<(), CoreError>, touched: bool) -> WizardValidation {
+    if !touched {
+        return WizardValidation::Hint;
+    }
+    match result {
+        Ok(()) => WizardValidation::Ok,
+        Err(err) => WizardValidation::Error(err.to_string()),
+    }
 }
 
 #[allow(clippy::too_many_lines)] // a form with 10 fields + 2 inline groups; the
@@ -273,19 +303,41 @@ pub fn show(ctx: &egui::Context, state: &mut WizardState) -> WizardAction {
         ui.add_space(8.0);
         ui.separator();
 
+        // Live validation only after the user has interacted with the form
+        // (typed text or clicked): a fresh wizard shows a neutral hint
+        // instead of "cluster name is empty".
+        if !state.touched
+            && (ui.input(|i| i.pointer.any_click())
+                || ui.input(|i| {
+                    i.events
+                        .iter()
+                        .any(|event| matches!(event, egui::Event::Text(_) | egui::Event::Key { .. }))
+                }))
+        {
+            state.touched = true;
+        }
+
         // On-the-fly validation: core is the single source of truth.
         let spec = state.to_spec();
-        match validate(&spec) {
-            Ok(()) => {
+        let check = validate(&spec);
+        let valid = check.is_ok();
+        match validation_status(&check, state.touched) {
+            WizardValidation::Hint => {
+                ui.label(
+                    RichText::new("Fill in the details, then Create")
+                        .color(theme::pal().text_dim)
+                        .size(12.0),
+                );
+            }
+            WizardValidation::Ok => {
                 ui.label(RichText::new("Spec OK").color(theme::pal().green).size(12.0));
             }
-            Err(err) => {
-                inline_error(ui, &err.to_string());
+            WizardValidation::Error(err) => {
+                inline_error(ui, &err);
             }
         }
 
         ui.add_space(8.0);
-        let valid = validate(&spec).is_ok();
         ui.horizontal(|ui| {
             let create = ui.add_enabled(
                 valid && !state.name.is_empty(),
@@ -370,5 +422,39 @@ mod tests {
         state.name = "Bad_Name!".to_string();
         let spec = state.to_spec();
         assert!(kindboard_core::validate(&spec).is_err());
+    }
+
+    #[test]
+    fn fresh_form_is_untouched() {
+        assert!(!WizardState::fresh().touched);
+        assert_eq!(
+            validation_status(&Err(validation_err()), false),
+            WizardValidation::Hint
+        );
+        // Total mapping: even a valid spec stays hidden behind the hint
+        // until the user has interacted.
+        assert_eq!(validation_status(&Ok(()), false), WizardValidation::Hint);
+    }
+
+    #[test]
+    fn recreate_form_starts_touched() {
+        let spec = form().to_spec();
+        assert!(WizardState::from_spec(&spec).touched);
+    }
+
+    #[test]
+    fn touched_forms_show_live_validation() {
+        let valid = Ok(());
+        assert_eq!(validation_status(&valid, true), WizardValidation::Ok);
+        let err = Err(validation_err());
+        assert!(
+            matches!(validation_status(&err, true), WizardValidation::Error(msg) if !msg.is_empty())
+        );
+    }
+
+    fn validation_err() -> CoreError {
+        let mut state = form();
+        state.name = "Bad_Name!".to_string();
+        kindboard_core::validate(&state.to_spec()).unwrap_err()
     }
 }
