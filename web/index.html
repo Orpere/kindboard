@@ -36,6 +36,7 @@
     <nav class="site-nav" id="site-nav" aria-label="Main navigation">
       <a href="#features">Features</a>
       <a href="#architecture">Architecture</a>
+      <a href="#components">Components</a>
       <a href="#screenshots">Screenshots</a>
       <a href="#themes">Themes</a>
       <a href="#cni">CNI matrix</a>
@@ -195,6 +196,56 @@
         <li>Generation counters drop stale events from superseded operations.</li>
         <li>Explicit error handling everywhere: no silent failures, no abandoned panes.</li>
       </ul>
+    </div>
+  </section>
+
+  <!-- ================= COMPONENTS ================= -->
+  <section class="section" id="components">
+    <div class="wrap">
+      <h2>The components under the hood</h2>
+      <p class="section-sub">kindboard orchestrates eight proven tools — it detects, installs and versions them for you, but their docs are one click away.</p>
+      <div class="features-grid">
+        <article class="card comp-card">
+          <h3 class="comp-name">kind</h3>
+          <p>Kubernetes in Docker — every lab cluster is a kind cluster, created and managed end-to-end by the wizard.</p>
+          <a class="comp-link" href="https://kind.sigs.k8s.io/" target="_blank" rel="noopener noreferrer">Official docs →</a>
+        </article>
+        <article class="card comp-card">
+          <h3 class="comp-name">kubectl</h3>
+          <p>The official Kubernetes CLI. kindboard uses it for topology snapshots, and exports contexts for your own terminal.</p>
+          <a class="comp-link" href="https://kubernetes.io/docs/reference/kubectl/" target="_blank" rel="noopener noreferrer">Official docs →</a>
+        </article>
+        <article class="card comp-card">
+          <h3 class="comp-name">docker</h3>
+          <p>The container runtime that runs every cluster node as a container — detected and checked by the dependency cockpit.</p>
+          <a class="comp-link" href="https://docs.docker.com/" target="_blank" rel="noopener noreferrer">Official docs →</a>
+        </article>
+        <article class="card comp-card">
+          <h3 class="comp-name">helm</h3>
+          <p>The Kubernetes package manager. kindboard keeps it versioned and ready for your charts after a cluster is up.</p>
+          <a class="comp-link" href="https://helm.sh/docs/" target="_blank" rel="noopener noreferrer">Official docs →</a>
+        </article>
+        <article class="card comp-card">
+          <h3 class="comp-name">cilium</h3>
+          <p>eBPF networking, observability and Gateway API. kindboard drives the CLI, Hubble and clustermesh end-to-end.</p>
+          <a class="comp-link" href="https://docs.cilium.io/en/stable/gettingstarted/k8s-install-default/" target="_blank" rel="noopener noreferrer">Official docs →</a>
+        </article>
+        <article class="card comp-card">
+          <h3 class="comp-name">k9s</h3>
+          <p>The terminal UI for managing clusters — kindboard launches it straight from a cluster tab with the right context.</p>
+          <a class="comp-link" href="https://k9scli.io/" target="_blank" rel="noopener noreferrer">Official docs →</a>
+        </article>
+        <article class="card comp-card">
+          <h3 class="comp-name">kustomize</h3>
+          <p>Kubernetes-native configuration management, built into kubectl — available for your own manifests.</p>
+          <a class="comp-link" href="https://kustomize.io/" target="_blank" rel="noopener noreferrer">Official docs →</a>
+        </article>
+        <article class="card comp-card">
+          <h3 class="comp-name">kubectx · kubens</h3>
+          <p>Fast context and namespace switching between your clusters and labs — installed and versioned by the cockpit.</p>
+          <a class="comp-link" href="https://github.com/ahmetb/kubectx" target="_blank" rel="noopener noreferrer">Official docs →</a>
+        </article>
+      </div>
     </div>
   </section>
 

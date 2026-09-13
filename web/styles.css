@@ -197,6 +197,13 @@ html[data-theme="light"] #theme-moon { display: block; }
 .card h3 { margin: 0 0 8px; font-size: 1.05rem; }
 .card p { margin: 0; color: var(--text-dim); font-size: 0.93rem; }
 
+/* ---------- component cards ---------- */
+.comp-card { display: flex; flex-direction: column; }
+.comp-name { font-family: var(--mono); font-size: 1.02rem; color: var(--accent); margin: 0 0 8px; letter-spacing: 0.01em; }
+.comp-card p { margin: 0 0 12px; }
+.comp-link { margin-top: auto; font-size: 0.86rem; font-weight: 600; color: var(--link); }
+.comp-link:hover { text-decoration: underline; }
+
 /* ---------- architecture ---------- */
 .arch-diagram { display: flex; align-items: stretch; gap: 20px; flex-wrap: wrap; margin: 20px 0 10px; }
 .arch-box {

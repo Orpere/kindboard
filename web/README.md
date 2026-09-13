@@ -52,7 +52,7 @@ subsequent visits — and reloads after the server is gone — work fully offlin
 
 | Path | Purpose |
 |---|---|
-| `index.html` | Single-page site (hero, features, architecture, screenshots, themes, CNI matrix, getting started, roadmap) |
+| `index.html` | Single-page site (hero, features, architecture, components, screenshots, themes, CNI matrix, getting started, roadmap) |
 | `styles.css` | Brand-matched design system (teal-blue accent, dark and light themes) |
 | `app.js` | Vanilla JS: mobile nav, scroll-spy, image lightbox, theme toggle, service-worker registration |
 | `network.js` | Vanilla JS: animated hero particle network (respects `prefers-reduced-motion`) |
