@@ -27,6 +27,7 @@ crossbeam-channel = "0.5"
 tokio = { version = "1.45", features = ["rt-multi-thread", "sync", "time"] }
 tokio-util = "0.7"
 image = { version = "0.25", default-features = false, features = ["png"] }
+libc = "0.2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 log = "0.4"
 rfd = "0.17"

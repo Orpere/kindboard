@@ -84,7 +84,7 @@ async fn create_cluster(_name: &str, spec: &ClusterSpec) {
     }
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-    let result = kindboard_core::run_plan(&plan, None, &tx).await;
+    let result = kindboard_core::run_plan(&plan, _name, None, &tx).await;
     while let Ok(event) = rx.try_recv() {
         if let ProvisionEvent::StepOutput { line, .. } = event {
             eprintln!("[kind] {line}");
@@ -270,7 +270,7 @@ async fn e2e_run_plan_executes_full_flow() {
     std::fs::create_dir_all(&data_dir).unwrap();
     let plan = kindboard_core::build_plan(&spec, &data_dir, &test_kubeconfig_path()).unwrap();
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-    let result = kindboard_core::run_plan(&plan, None, &tx).await;
+    let result = kindboard_core::run_plan(&plan, &name, None, &tx).await;
     let mut events = Vec::new();
     while let Ok(event) = rx.try_recv() {
         if let ProvisionEvent::StepOutput { line, .. } = event {
@@ -358,7 +358,7 @@ async fn e2e_cni_matrix_flannel_calico_cilium() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
         let result = tokio::time::timeout(
             Duration::from_secs(900),
-            kindboard_core::run_plan(&plan, None, &tx),
+            kindboard_core::run_plan(&plan, &name, None, &tx),
         )
         .await;
         let mut lines = Vec::new();

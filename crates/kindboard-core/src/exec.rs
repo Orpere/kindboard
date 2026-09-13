@@ -176,6 +176,7 @@ impl Cmd {
     /// stdout/stderr receivers. The caller should drain the receivers while
     /// the process runs, then call [`ProcessHandle::wait`].
     pub async fn spawn(&self) -> Result<ProcessHandle, ExecError> {
+        log::debug!("exec {} {:?}", self.program, self.args);
         let mut command = Command::new(&self.program);
         command.args(&self.args);
         for (key, value) in &self.env {

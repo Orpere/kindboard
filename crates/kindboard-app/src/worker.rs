@@ -655,7 +655,7 @@ async fn create_phase(
             );
         }
     });
-    let result = core::run_plan(&plan, Some(token.clone()), &plan_tx).await;
+    let result = core::run_plan(&plan, &spec.name, Some(token.clone()), &plan_tx).await;
     drop(plan_tx);
     let _ = forward.await;
     result.map_err(|err| err.to_string())

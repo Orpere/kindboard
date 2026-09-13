@@ -626,6 +626,7 @@ fn step(
 /// to every spawned subprocess and checked between steps.
 pub async fn run_plan(
     plan: &CreatePlan,
+    cluster_name: &str,
     cancel: Option<CancellationToken>,
     tx: &mpsc::Sender<ProvisionEvent>,
 ) -> Result<()> {
@@ -651,9 +652,11 @@ pub async fn run_plan(
                 id: step.id.clone(),
             })
             .await;
+        log::info!("provision {cluster_name} step {} started", step.id);
         let result = execute_step(step, plan, cancel.as_ref(), tx).await;
         match result {
             Ok(()) => {
+                log::info!("provision {cluster_name} step {} completed", step.id);
                 let _ = tx
                     .send(ProvisionEvent::StepFinished {
                         id: step.id.clone(),
@@ -1372,7 +1375,7 @@ mod tests {
             kubeconfig_path: dir.join("config"),
         };
         let (tx, mut rx) = mpsc::channel(64);
-        run_plan(&plan, None, &tx).await.unwrap();
+        run_plan(&plan, "test-cluster", None, &tx).await.unwrap();
         assert_eq!(std::fs::read_to_string(&out_file).unwrap(), "hello plan");
         let mut events = Vec::new();
         while let Ok(event) = rx.try_recv() {
@@ -1422,7 +1425,9 @@ mod tests {
             kubeconfig_path: dir.join("config"),
         };
         let (tx, mut rx) = mpsc::channel(64);
-        let err = run_plan(&plan, None, &tx).await.unwrap_err();
+        let err = run_plan(&plan, "test-cluster", None, &tx)
+            .await
+            .unwrap_err();
         assert!(
             matches!(err, CoreError::Provision(ProvisionError::StepFailed { .. })),
             "{err:?}"
@@ -1469,7 +1474,9 @@ mod tests {
         let token = CancellationToken::new();
         token.cancel();
         let (tx, _rx) = mpsc::channel(64);
-        let err = run_plan(&plan, Some(token), &tx).await.unwrap_err();
+        let err = run_plan(&plan, "test-cluster", Some(token), &tx)
+            .await
+            .unwrap_err();
         assert!(matches!(err, CoreError::Provision(_)), "{err:?}");
         assert!(!dir.join("second.txt").exists());
         let _ = std::fs::remove_dir_all(&dir);

@@ -874,6 +874,7 @@ pub async fn install_with_progress(
     tx: &mpsc::Sender<InstallEvent>,
 ) -> Result<ToolStatus> {
     let plan = plan_install(id)?;
+    log::info!("installing dependency {id}");
     let total = plan.steps.len();
     for (index, step) in plan.steps.iter().enumerate() {
         if let Some(token) = &cancel
@@ -937,6 +938,7 @@ pub async fn install_with_progress(
                 let _ = tx.send(InstallEvent::StepFinished { step: index }).await;
             }
             Err(err) => {
+                log::info!("failed to install dependency {id}");
                 let reason = match err {
                     crate::error::ExecError::Command {
                         code, stderr_tail, ..
@@ -954,7 +956,15 @@ pub async fn install_with_progress(
     }
     // Re-detect against the (possibly updated) PATH so the caller gets the
     // definitive post-install status.
-    detect(id).await
+    let status = detect(id).await?;
+    log::info!(
+        "installed dependency {id} {}",
+        match &status {
+            ToolStatus::Installed { version, .. } => version.to_string(),
+            other => format!("{other:?}"),
+        }
+    );
+    Ok(status)
 }
 
 fn step_timeout(step: &InstallStep) -> std::time::Duration {

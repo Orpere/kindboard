@@ -92,6 +92,16 @@ impl K8sClient {
 
     /// Read the full cluster topology into a [`TopologyGraph`].
     pub async fn poll_topology(&self) -> Result<TopologyGraph> {
+        match self.poll_topology_inner().await {
+            Ok(graph) => Ok(graph),
+            Err(err) => {
+                log::debug!("topology watch error for cluster {}: {err}", self.context);
+                Err(err)
+            }
+        }
+    }
+
+    async fn poll_topology_inner(&self) -> Result<TopologyGraph> {
         let client = &self.client;
         let list_params = ListParams::default();
 
