@@ -83,5 +83,5 @@ publish: ## Deploy web/ to GitHub Pages via the gh-pages branch (no Actions)
 	@cd $(PAGES_DIR) && git init -q && git add -A && \
 		git -c user.name="kindboard" -c user.email="kindboard@users.noreply.github.com" commit -qm "publish $(VERSION)"
 	@cd $(PAGES_DIR) && git push -q -f "$$(git -C $(ROOT) remote get-url origin)" HEAD:gh-pages
-	@gh api -X PUT repos/$(REPO)/pages -f source[branch]=gh-pages -f source[path]=/ >/dev/null
+	@gh api -X PUT repos/$(REPO)/pages -f build_type=legacy -f 'source[branch]=gh-pages' -f 'source[path]=/' >/dev/null
 	@echo "published -> https://orpere.github.io/kindboard/"
