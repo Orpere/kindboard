@@ -29,7 +29,7 @@ use crate::error::{CoreError, ProvisionError, Result};
 use crate::exec::Cmd;
 use crate::kindctl::KindCommand;
 use crate::kubeconfig::KubeconfigStore;
-use crate::spec::{self, ClusterSpec, Cni, IngressController};
+use crate::spec::{self, CiliumOptions, ClusterSpec, Cni, IngressController};
 
 /// Id of a provisioning step (stable across runs).
 pub type StepId = String;
@@ -82,6 +82,18 @@ pub enum ProvisionAction {
         dest: PathBuf,
         /// Target pod CIDR.
         pod_cidr: String,
+    },
+    /// Poll until a CRD exists (registered at runtime by an operator, e.g.
+    /// tigera-operator), or the timeout expires. `kubectl wait` cannot be
+    /// used here: it fails immediately with NotFound while the resource
+    /// does not exist yet.
+    WaitForCrd {
+        /// Kubeconfig context.
+        context: String,
+        /// CRD name (e.g. `installations.operator.tigera.io`).
+        name: String,
+        /// Total budget; polls every 5 seconds.
+        timeout: std::time::Duration,
     },
 }
 
@@ -156,6 +168,9 @@ impl CreatePlan {
                     source.display(),
                     dest.display()
                 ),
+                ProvisionAction::WaitForCrd { name, timeout, .. } => {
+                    format!("[{}] wait for CRD {name} (up to {timeout:?})", step.id)
+                }
             })
             .collect()
     }
@@ -206,6 +221,13 @@ pub fn build_plan(
     kubeconfig_path: &Path,
 ) -> Result<CreatePlan> {
     spec::validate(spec)?;
+    // Cilium with no explicit options resolves to the defaults — which
+    // include the Cilium ingress controller (the default ingress choice
+    // when none is selected).
+    let cilium: Option<CiliumOptions> = match (spec.cni, spec.cilium.clone()) {
+        (Cni::Cilium, None) => Some(CiliumOptions::default()),
+        (_, options) => options,
+    };
     let context = KubeconfigStore::kind_context_name(&spec.name);
     let tmp = data_dir.join("tmp");
     let kind_config_path = tmp.join(format!("kind-{}.yaml", spec.name));
@@ -324,11 +346,26 @@ pub fn build_plan(
                 }),
                 VerifySpec::None,
             );
+            // The tigera operator pod registers its CRDs at startup; the
+            // Installation CR must not be applied before the
+            // installations.operator.tigera.io CRD exists (applying early
+            // fails with "no matches for kind Installation").
+            let wait_crds = step(
+                &mut steps,
+                "cni-calico-operator-wait-crds",
+                &[&apply_operator],
+                ProvisionAction::WaitForCrd {
+                    context: context.clone(),
+                    name: "installations.operator.tigera.io".to_string(),
+                    timeout: manifests::CALICO_CRD_TIMEOUT,
+                },
+                VerifySpec::None,
+            );
             let cr_path = tmp.join(format!("calico-installation-{}.yaml", spec.name));
             let write_cr = step(
                 &mut steps,
                 "cni-calico-cr-write",
-                &[&apply_operator],
+                &[&wait_crds],
                 ProvisionAction::WriteFile {
                     path: cr_path.clone(),
                     content: manifests::calico_installation_cr(&spec.pod_cidr),
@@ -351,7 +388,7 @@ pub fn build_plan(
         }
         Cni::Cilium => {
             let mut sets = vec![manifests::CILIUM_SET_KUBE_PROXY_DISABLED.to_string()];
-            let mesh_sets: Vec<String> = match (&spec.cilium, spec.cni) {
+            let mesh_sets: Vec<String> = match (&cilium, spec.cni) {
                 (Some(options), Cni::Cilium) if options.mesh => vec![
                     format!("cluster.name={}", options.cluster_name),
                     format!("cluster.id={}", options.cluster_id),
@@ -378,7 +415,7 @@ pub fn build_plan(
             previous = install.clone();
             last_cni = Some(install);
 
-            if let Some(options) = &spec.cilium {
+            if let Some(options) = &cilium {
                 if options.hubble {
                     let hubble = step(
                         &mut steps,
@@ -772,6 +809,51 @@ async fn execute_step(
                     source: err,
                 })?;
         }
+        ProvisionAction::WaitForCrd {
+            context,
+            name,
+            timeout,
+        } => {
+            let deadline = tokio::time::Instant::now() + *timeout;
+            loop {
+                let mut probe = KindCommand::KubectlGetCrd {
+                    context: context.clone(),
+                    name: name.clone(),
+                }
+                .to_cmd();
+                if let Some(token) = cancel {
+                    probe = probe.cancel(token.clone());
+                }
+                match probe.run().await {
+                    Ok(_) => break,
+                    // kubectl ran but the CRD does not exist yet: keep
+                    // polling. Hard failures (missing kubectl, timeout,
+                    // cancellation) fail fast instead of looping for the
+                    // whole budget. Note: a broken kubeconfig context also
+                    // surfaces as Command and therefore polls to the
+                    // deadline — acceptable (the final error names the
+                    // CRD; kubectl's stderr is in the event stream).
+                    Err(crate::error::ExecError::Command { .. }) => {}
+                    Err(other) => {
+                        return Err(ProvisionError::StepFailed {
+                            id: step.id.clone(),
+                            source: Box::new(CoreError::Exec(other)),
+                        }
+                        .into());
+                    }
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(ProvisionError::StepFailed {
+                        id: step.id.clone(),
+                        source: Box::new(CoreError::Config(format!(
+                            "CRD {name} did not appear within {timeout:?}"
+                        ))),
+                    }
+                    .into());
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        }
     }
 
     if let VerifySpec::Command(verify) = &step.verify {
@@ -1017,6 +1099,7 @@ mod tests {
             "merge-kubeconfig",
             "cni-calico-operator-download",
             "cni-calico-operator-apply",
+            "cni-calico-operator-wait-crds",
             "cni-calico-cr-write",
             "cni-calico-cr-apply",
             "final-verify",
@@ -1027,6 +1110,13 @@ mod tests {
                 assert!(content.contains("cidr: 192.168.0.0/16"), "{content}");
             }
             other => panic!("expected WriteFile, got {other:?}"),
+        }
+        match &find(&plan, "cni-calico-operator-wait-crds").command {
+            ProvisionAction::WaitForCrd { name, timeout, .. } => {
+                assert_eq!(name, "installations.operator.tigera.io");
+                assert_eq!(*timeout, std::time::Duration::from_secs(300));
+            }
+            other => panic!("expected WaitForCrd, got {other:?}"),
         }
     }
 
@@ -1045,7 +1135,7 @@ mod tests {
             }) => {
                 assert_eq!(context, "kind-demo");
                 assert!(version.is_none());
-                assert_eq!(sets, &vec!["kubeProxyReplacement=disabled"]);
+                assert_eq!(sets, &vec!["kubeProxyReplacement=false"]);
                 assert!(*wait);
             }
             other => panic!("expected CiliumInstall, got {other:?}"),
@@ -1092,7 +1182,7 @@ mod tests {
                 assert_eq!(
                     sets,
                     &vec![
-                        "kubeProxyReplacement=disabled",
+                        "kubeProxyReplacement=false",
                         "cluster.name=mesh-a",
                         "cluster.id=7",
                         "clustermesh.apiserver.service.type=NodePort",

@@ -224,3 +224,33 @@ Writes are **atomic everywhere**: serialize to `tmp/`, `fsync`, rename over targ
 - helm 4.2.2 local `helm install --help`: `--wait` strategy default `hookOnly`.
 - kube-rs 4.2.0 `Kubeconfig` methods (`read_from/from_yaml/read/from_env/merge`, `Serialize/Deserialize` with flatten `other`) from `kube-client/src/config/file_config.rs`.
 - Fedora 44 `dnf repoquery` for package availability (see dependency-install-matrix).
+
+## Live e2e verification (2026-09-13)
+
+- CNI matrix `e2e_cni_matrix_flannel_calico_cilium` ran live against real
+  kind: **flannel ✓** and **calico ✓** provisioned end to end (kind create →
+  kubeconfig merge → CNI install → readiness verification → kube-rs topology
+  read), clusters kept for inspection (`KINDBOARD_E2E_KEEP=1`).
+- Fixes found and verified live along the way:
+  - calico: the tigera operator registers its CRDs at runtime — the
+    `Installation` CR now waits for `installations.operator.tigera.io` to
+    exist (polling step, 5 min budget) before applying.
+  - exec timeouts: `kubectl wait` steps now carry a 180 s runner budget
+    (their internal `--timeout=2m` used to outlive the runner's 60 s) and
+    install-class commands (helm/cilium) 600 s.
+  - cilium: `kubeProxyReplacement` must be `false` for Cilium 1.20+ (the
+    `disabled` keyword is rejected).
+- **cilium agent cannot start on this host's kernel 7.2.4**: its startup BPF
+  probe fails with `call bpf_set_retval#187: R1 is not a scalar` (kernel 7.x
+  changed the helper signature; reproducible on cilium 1.20.1 and
+  1.21.0-pre.0). kindboard's own provisioning up to that point is verified
+  (kind-create ✓, helm values accepted ✓). The e2e supports
+  `KINDBOARD_E2E_SKIP_CILIUM=1` for affected hosts; boot kernel 6.19.10
+  (installed) to run cilium clusters.
+- Host requirement documented: kind nodes consume inotify instances —
+  `fs.inotify.max_user_instances=1024` and `fs.inotify.max_user_watches=524288`
+  are set persistently in `/etc/sysctl.d/60-kindboard-inotify.conf` (a third
+  kind node fails to bootstrap at the default 128 instances).
+- Screenshot capture is now built into the app (`--screenshot`,
+  `--screenshot-every`, `--screenshot-delay`, `--screenshot-dir`) — used to
+  produce the howto screenshots headlessly on Xvfb.

@@ -17,11 +17,17 @@ use crate::exec::Cmd;
 /// Timeout for cheap version probes.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Timeout for helm/cilium operations.
-pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(120);
+pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(600);
 /// Timeout for `kind create cluster` (provisioning can be slow).
 pub const CREATE_TIMEOUT: Duration = Duration::from_secs(300);
 /// Timeout for everything else.
 pub const GENERAL_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Exec budget for `kubectl wait` steps: must exceed the longest internal
+/// `--timeout` (node-ready waits use `2m`) plus polling margin. The internal
+/// kubectl timeout bounds the real work; this only prevents the runner from
+/// killing a legitimately slow wait.
+pub const WAIT_TIMEOUT: Duration = Duration::from_secs(180);
 /// `--wait` value passed to `kind create cluster`.
 pub const KIND_WAIT_FLAG: &str = "5m";
 
@@ -149,6 +155,15 @@ pub enum KindCommand {
         context: String,
         /// Namespace (empty = all namespaces).
         ns: String,
+    },
+    /// `kubectl --context <c> get crd <name>` (exit 0 = the CRD exists).
+    /// Used by the provision runner to poll for CRDs registered at runtime
+    /// by operators (e.g. tigera-operator).
+    KubectlGetCrd {
+        /// Kubeconfig context.
+        context: String,
+        /// CRD name (e.g. `installations.operator.tigera.io`).
+        name: String,
     },
 
     // ---- helm (ingress + generic chart install) ----
@@ -456,7 +471,7 @@ impl KindCommand {
                 args.push(condition.clone());
                 args.push("--timeout".to_string());
                 args.push(timeout.clone());
-                ("kubectl", args, GENERAL_TIMEOUT)
+                ("kubectl", args, WAIT_TIMEOUT)
             }
             KindCommand::KubectlLogs {
                 context,
@@ -503,6 +518,17 @@ impl KindCommand {
                 args.push("json".to_string());
                 ("kubectl", args, GENERAL_TIMEOUT)
             }
+            KindCommand::KubectlGetCrd { context, name } => (
+                "kubectl",
+                vec![
+                    "--context".to_string(),
+                    context.clone(),
+                    "get".to_string(),
+                    "crd".to_string(),
+                    name.clone(),
+                ],
+                GENERAL_TIMEOUT,
+            ),
             KindCommand::HelmVersion => (
                 "helm",
                 vec!["version".into(), "--short".into()],

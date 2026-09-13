@@ -19,4 +19,4 @@ Every logo is a trademark of its respective owner; used for identification under
 | k9s | Derailed (k9s project) | https://raw.githubusercontent.com/derailed/k9s/master/assets/k9s.png |  |
 | kubectx | Ahmet Alp Balkan (kubectx project) | generated placeholder | no usable official asset found: no official logo exists in the repository or project site |
 | kustomize | Kubernetes SIGs (kustomize project) | https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/site/static/favicons/favicon-1024.png |  |
-| kubectl | Kubernetes project | generated placeholder | no usable official asset found: kubectl has no standalone official logo (it is part of Kubernetes) |
+| kubectl | Kubernetes project | generated placeholder | kubectl has no standalone official logo — kindboard uses the **Kubernetes** logo for it (row above) |

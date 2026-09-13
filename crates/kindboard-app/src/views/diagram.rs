@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, Vec2};
-use kindboard_core::{K8sEvent, LayoutKind, PodPhase, Service, TopologyGraph, Workload};
+use kindboard_core::{K8sEvent, LayoutKind, NodeRole, PodPhase, Service, TopologyGraph, Workload};
 
 use crate::theme;
 use crate::util::{time_of, truncate};
@@ -588,9 +588,28 @@ fn paint_legend(painter: &egui::Painter, canvas: Rect, collapsed_count: usize) {
 // Detail side panel (clicked node).
 // ---------------------------------------------------------------------------
 
+/// An action requested from the detail panel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiagramAction {
+    /// The user asked to delete a worker node (guided recreate).
+    DeleteNode {
+        /// Node name.
+        node: String,
+    },
+}
+
 /// Render the detail panel for the selected node id, or a hint when nothing
-/// is selected.
-pub fn detail_panel(ui: &mut egui::Ui, graph: &TopologyGraph, selected: &Option<String>) {
+/// is selected. Returns a requested action, if any.
+///
+/// `can_delete_node` gates the node-delete button (adopted clusters have no
+/// stored spec and cannot be recreated).
+pub fn detail_panel(
+    ui: &mut egui::Ui,
+    graph: &TopologyGraph,
+    selected: &Option<String>,
+    can_delete_node: bool,
+) -> Option<DiagramAction> {
+    let mut action = None;
     let Some(id) = selected else {
         ui.label(
             egui::RichText::new("Select a node in the diagram to inspect it")
@@ -602,7 +621,7 @@ pub fn detail_panel(ui: &mut egui::Ui, graph: &TopologyGraph, selected: &Option<
                 .size(11.0)
                 .color(theme::TEXT_DIM),
         );
-        return;
+        return None;
     };
     let name = id.rsplit('/').next().unwrap_or(id);
     let kind = id.split('/').next().unwrap_or("");
@@ -611,6 +630,53 @@ pub fn detail_panel(ui: &mut egui::Ui, graph: &TopologyGraph, selected: &Option<
     let ns = if kind == "namespace" { name } else { ns_of(id) };
 
     match kind {
+        "node" => match graph.nodes.iter().find(|node| node.name == name) {
+            Some(node) => {
+                ui.heading(&node.name);
+                ui.label(format!(
+                    "role: {}",
+                    match node.role {
+                        NodeRole::ControlPlane => "control-plane",
+                        NodeRole::Worker => "worker",
+                    }
+                ));
+                ui.label(format!("ready: {}", if node.ready { "yes" } else { "no" }));
+                ui.separator();
+                match node.role {
+                    NodeRole::ControlPlane => {
+                        ui.label(
+                                egui::RichText::new(
+                                    "The control-plane node cannot be removed (kind requires exactly one).",
+                                )
+                                .color(theme::TEXT_DIM)
+                                .size(11.0),
+                            );
+                    }
+                    NodeRole::Worker => {
+                        let enabled = can_delete_node;
+                        let button = ui.add_enabled(
+                            enabled,
+                            egui::Button::new(egui::RichText::new("Delete node").color(theme::RED)),
+                        );
+                        if button
+                                .on_hover_text(if enabled {
+                                    "Destroy this worker node (recreates the cluster with one fewer worker; workloads are lost)"
+                                } else {
+                                    "Adopted clusters have no stored spec and cannot be recreated"
+                                })
+                                .clicked()
+                            {
+                                action = Some(DiagramAction::DeleteNode {
+                                    node: node.name.clone(),
+                                });
+                            }
+                    }
+                }
+            }
+            None => {
+                ui.label(name);
+            }
+        },
         "namespace" => {
             ui.heading(name);
             let workloads = graph.workloads.iter().filter(|w| w.ns == ns).count();
@@ -629,7 +695,7 @@ pub fn detail_panel(ui: &mut egui::Ui, graph: &TopologyGraph, selected: &Option<
                 .find(|w| w.ns == ns && w.name == name)
             else {
                 ui.label(name);
-                return;
+                return None;
             };
             ui.heading(format!("{} {}", workload.kind.as_str(), workload.name));
             ui.label(format!("namespace: {}", workload.ns));
@@ -645,7 +711,7 @@ pub fn detail_panel(ui: &mut egui::Ui, graph: &TopologyGraph, selected: &Option<
         "pod" => {
             let Some(pod) = graph.pods.iter().find(|p| p.ns == ns && p.name == name) else {
                 ui.label(name);
-                return;
+                return None;
             };
             ui.heading(&pod.name);
             ui.label(format!("namespace: {}", pod.ns));
@@ -670,7 +736,7 @@ pub fn detail_panel(ui: &mut egui::Ui, graph: &TopologyGraph, selected: &Option<
         "service" => {
             let Some(service) = graph.services.iter().find(|s| s.ns == ns && s.name == name) else {
                 ui.label(name);
-                return;
+                return None;
             };
             ui.heading(&service.name);
             ui.label(format!("namespace: {}", service.ns));
@@ -699,7 +765,7 @@ pub fn detail_panel(ui: &mut egui::Ui, graph: &TopologyGraph, selected: &Option<
                 .find(|i| i.ns == ns && i.name == name)
             else {
                 ui.label(name);
-                return;
+                return None;
             };
             ui.heading(&ingress.name);
             ui.label(format!("namespace: {}", ingress.ns));
@@ -740,6 +806,8 @@ pub fn detail_panel(ui: &mut egui::Ui, graph: &TopologyGraph, selected: &Option<
             .color(theme::TEXT_DIM),
         );
     }
+
+    action
 }
 
 fn label_map(ui: &mut egui::Ui, title: &str, map: &BTreeMap<String, String>) {

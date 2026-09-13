@@ -1,8 +1,10 @@
-//! Asset loading (window icon) and icon-ish widget painting.
+//! Asset loading (window icon) and tool-logo painting.
 //!
-//! The docs phase will add PNG logo tiles under `assets/icons/`; until then
-//! the app falls back to monogram boxes. Asset loading tolerates missing
-//! files: it logs once and continues — never a crash.
+//! Tool logos are the official project logos (see assets/ATTRIBUTION.md),
+//! embedded at compile time. kubectl uses the Kubernetes logo (it is part
+//! of Kubernetes); kubectx has no official logo and falls back to a
+//! colored monogram box. Asset loading tolerates missing files: it logs
+//! once and continues — never a crash.
 
 use std::sync::Arc;
 
@@ -22,6 +24,31 @@ const ICON_CANDIDATES: &[&str] = &[
     "assets/icons/kindboard-64.png",
     "../assets/icons/kindboard-64.png",
 ];
+
+/// Official tool logo PNGs (64 px), embedded at compile time. `None` for
+/// tools without any official logo (kubectx) — the monogram fallback is
+/// drawn instead. kubectl is part of Kubernetes, so it uses the Kubernetes
+/// logo.
+fn tool_logo_png(id: ToolId) -> Option<&'static [u8]> {
+    Some(match id {
+        ToolId::Docker => include_bytes!("../../../assets/logos/docker-64.png"),
+        ToolId::Kind => include_bytes!("../../../assets/logos/kind-64.png"),
+        ToolId::Kubectl => include_bytes!("../../../assets/logos/kubernetes-64.png"),
+        ToolId::Helm => include_bytes!("../../../assets/logos/helm-64.png"),
+        ToolId::Cilium => include_bytes!("../../../assets/logos/cilium-64.png"),
+        ToolId::K9s => include_bytes!("../../../assets/logos/k9s-64.png"),
+        ToolId::Kubectx => return None,
+        ToolId::Kustomize => include_bytes!("../../../assets/logos/kustomize-64.png"),
+    })
+}
+
+/// Decode an embedded PNG and load it as an egui texture (cached by name).
+fn load_texture(ctx: &egui::Context, name: &str, png: &[u8]) -> Option<egui::TextureHandle> {
+    let image = image::load_from_memory(png).ok()?.to_rgba8();
+    let size = [image.width() as usize, image.height() as usize];
+    let color = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
+    Some(ctx.load_texture(name, color, egui::TextureOptions::LINEAR))
+}
 
 /// Load the window icon (`assets/icons/kindboard-64.png`) if present.
 /// Logs once when absent; returns `None` — the OS default icon is used.
@@ -55,10 +82,33 @@ fn decode_icon(bytes: &[u8]) -> Result<egui::viewport::IconData, String> {
     })
 }
 
-/// Draw a tool icon: a colored rounded square with a 2-letter monogram.
-/// This is the fallback until real logo PNGs land; the tile slot is kept
-/// so swapping to `Image` later is a one-line change.
+/// Draw the official logo for a tool (kubectl uses the Kubernetes logo).
+/// Returns `true` when a logo was drawn, `false` when the tool has none
+/// (caller falls back to a monogram).
+pub fn logo_image(ui: &mut Ui, id: ToolId, size: f32) -> bool {
+    let Some(png) = tool_logo_png(id) else {
+        return false;
+    };
+    let Some(texture) = load_texture(ui.ctx(), &format!("tool-logo-{id}"), png) else {
+        return false;
+    };
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
+    ui.painter().image(
+        texture.id(),
+        rect,
+        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+        Color32::WHITE,
+    );
+    true
+}
+
+/// Draw a tool icon: the official logo when one exists (kubectl uses the
+/// Kubernetes logo), otherwise a colored rounded square with a 2-letter
+/// monogram (kubectx has no official logo).
 pub fn tool_icon(ui: &mut Ui, id: ToolId, size: f32) {
+    if logo_image(ui, id, size) {
+        return;
+    }
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
     let color = tool_color(id);
     let painter = ui.painter();
@@ -78,9 +128,23 @@ pub fn tool_icon(ui: &mut Ui, id: ToolId, size: f32) {
     );
 }
 
-/// Small brand logo box for the window chrome/headers (monogram fallback).
+/// Small brand logo box for the window chrome/headers (the kindboard mark,
+/// embedded at compile time).
 pub fn brand_mark(ui: &mut Ui, size: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
+    if let Some(texture) = load_texture(
+        ui.ctx(),
+        "brand-mark",
+        include_bytes!("../../../assets/icons/kindboard-64.png"),
+    ) {
+        ui.painter().image(
+            texture.id(),
+            rect,
+            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+            Color32::WHITE,
+        );
+        return;
+    }
     let painter = ui.painter();
     painter.rect(
         rect,

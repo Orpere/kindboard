@@ -69,9 +69,16 @@ pub const INGRESS_NGINX_NAMESPACE: &str = "ingress-nginx";
 /// Timeout used for node-ready wait verification.
 pub const NODE_READY_TIMEOUT: &str = "2m";
 
-/// Cilium helm value forcing kube-proxy replacement off for kind
-/// (no LoadBalancer support on kind without metallb).
-pub const CILIUM_SET_KUBE_PROXY_DISABLED: &str = "kubeProxyReplacement=disabled";
+/// Budget for polling on the tigera operator's CRDs to appear (the
+/// operator pod registers them at startup; applying the Installation CR
+/// before that fails with "no matches for kind Installation").
+pub const CALICO_CRD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Cilium helm value forcing kube-proxy replacement off for kind (kind
+/// manages its own kube-proxy). Cilium 1.20+ validates this strictly:
+/// only `true`/`false` are accepted (the old `disabled` keyword errors
+/// with "kubeProxyReplacement must be explicitly set to a valid value").
+pub const CILIUM_SET_KUBE_PROXY_DISABLED: &str = "kubeProxyReplacement=false";
 
 /// Cilium helm value enabling the ingress controller.
 pub const CILIUM_SET_INGRESS_ENABLED: &str = "ingressController.enabled=true";

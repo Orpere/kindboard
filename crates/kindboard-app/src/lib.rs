@@ -25,5 +25,5 @@ pub mod util;
 pub mod views;
 pub mod worker;
 
-pub use app::KindboardApp;
+pub use app::{KindboardApp, ScreenshotMode};
 pub use bus::{Buses, CoreCommand, CoreEvent};

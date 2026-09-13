@@ -18,8 +18,8 @@ pub struct ClusterSpec {
     pub worker_count: u32,               // >=0; control-plane is ALWAYS exactly 1
     pub extra_port_mappings: Vec<PortMapping>, // 80/443 etc. for ingress
     pub feature_gates: BTreeMap<String, bool>,
-    pub ingress: Option<IngressController>,     // None = no ingress controller installed
-    pub cilium: Option<CiliumOptions>,          // Some only when cni == Cilium
+    pub ingress: Option<IngressController>,     // None = no *explicit* ingress choice
+    pub cilium: Option<CiliumOptions>,          // Some only when cni == Cilium; None resolves to defaults
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -58,7 +58,7 @@ pub struct PortMapping {
 
 **Invariants (validated in `spec::validate`, never violated at runtime):**
 
-- `cni == Cilium` ⟺ `cilium.is_some()`; any other CNI ⇒ `cilium.is_none()`.
+- `cni == Cilium` ⇒ `cilium.is_none()` resolves to `CiliumOptions::default()` at plan build (the default enables the **Cilium ingress controller** — the default ingress when none is chosen); any other CNI ⇒ `cilium.is_none()`.
 - `IngressController::Cilium` ⇒ `cni == Cilium && cilium.ingress`.
 - `cilium.mesh` ⇒ `cilium.cluster_id ∈ 1..=255 && !cilium.cluster_name.is_empty()`.
 - `extra_port_mappings` host ports must be unique; 80/443 must be present iff `ingress == Nginx || Traefik`.
@@ -187,7 +187,7 @@ Exact values (per-platform package names, detect commands, and fallback URLs) li
 | kindnet-default | false | — | helm install (80/443 already mapped) | n/a | n/a |
 | flannel | true | `kubectl apply kube-flannel.yml` | helm install | n/a | n/a |
 | calico | true | `kubectl create tigera-operator.yaml` → apply `Installation` CR (cidr=pod_cidr) | helm install | n/a | n/a |
-| cilium | true | `cilium install [--set cluster.name/--set cluster.id if mesh]` | n/a | `cilium install --set ingressController.enabled=true` (kubeProxyReplacement auto-on in kind) | hubble / gateway-api / clustermesh below |
+| cilium | true | `cilium install --set kubeProxyReplacement=false [--set cluster.name/--set cluster.id if mesh]` | n/a | `cilium install --set ingressController.enabled=true` | hubble / gateway-api / clustermesh below |
 
 **Pod-CIDR consistency rule (applies to flannel & calico):** with `disableDefaultCNI: true`, kind does **not** install a CNI, but `kube-controller-manager --cluster-cidr` still allocates node `podCIDR`s from `podSubnet`. The CNI's own network must match:
 
@@ -202,7 +202,7 @@ Exact values (per-platform package names, detect commands, and fallback URLs) li
 | Extra | Commands | Notes |
 |---|---|---|
 | Hubble | `cilium hubble enable --relay --ui` | `--relay` default true, `--ui` optional |
-| Ingress controller | `cilium install --set ingressController.enabled=true` | requires `kubeProxyReplacement=true` (default in kind); creates LoadBalancer service. **Note:** the `cilium ingress enable` subcommand was removed from current cilium-cli — use `--set`.
+| Ingress controller | `cilium install --set ingressController.enabled=true` | creates a LoadBalancer service. kindboard installs cilium with `kubeProxyReplacement=false`; some cilium releases require kube-proxy replacement for the ingress controller — on-host ingress verification is pending where the cilium agent cannot start (see architecture verification log). **Note:** the `cilium ingress enable` subcommand was removed from current cilium-cli — use `--set`. |
 | API Gateway | install Gateway API CRDs (`kubectl apply --server-side …gateway…`) then `cilium upgrade --set gatewayAPI.enabled=true` | **no `--gateway-api` flag and no `cilium gateway-api` command exist** in current cilium-cli — see §6 |
 | Mesh (clustermesh) | `cilium install --set cluster.name=X --set cluster.id=N --set clustermesh.apiserver.service.type=NodePort` → `cilium clustermesh enable` → `cilium clustermesh connect --destination-context <other>` | NodePort required on kind (no LoadBalancer); IDs unique across mesh |
 

@@ -8,6 +8,8 @@ use eframe::egui::{self, Color32, CornerRadius, Margin, Style, Visuals};
 pub const ACCENT: Color32 = Color32::from_rgb(0x3d, 0xa5, 0xd9);
 /// Accent used as a hover fill.
 pub const ACCENT_HOVER: Color32 = Color32::from_rgb(0x2a, 0x76, 0x9d);
+/// Text on the accent fill (high contrast).
+pub const ON_ACCENT: Color32 = Color32::from_rgb(0x06, 0x0d, 0x12);
 /// Healthy/ready state.
 pub const GREEN: Color32 = Color32::from_rgb(0x4d, 0xc0, 0x64);
 /// Warning/pending state.

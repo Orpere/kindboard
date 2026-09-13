@@ -101,7 +101,7 @@ pub enum IngressController {
 }
 
 /// Cilium extras configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CiliumOptions {
     /// Enable the Gateway API controller (`gatewayAPI.enabled=true`).
     pub api_gateway: bool,
@@ -116,6 +116,22 @@ pub struct CiliumOptions {
     pub cluster_id: u16,
     /// Cluster name in the mesh; required (valid DNS label ≤ 32) iff `mesh`.
     pub cluster_name: String,
+}
+
+impl Default for CiliumOptions {
+    fn default() -> Self {
+        CiliumOptions {
+            api_gateway: false,
+            hubble: false,
+            // The Cilium ingress controller is the default ingress choice:
+            // when no ingress controller is explicitly selected, a cilium
+            // cluster still gets Cilium's built-in ingress controller.
+            ingress: true,
+            mesh: false,
+            cluster_id: 0,
+            cluster_name: String::new(),
+        }
+    }
 }
 
 /// IP protocol for a port mapping.
@@ -230,12 +246,9 @@ pub fn validate(spec: &ClusterSpec) -> Result<()> {
     }
 
     match (&spec.cni, &spec.cilium) {
-        (Cni::Cilium, Some(_)) => {}
-        (Cni::Cilium, None) => {
-            return Err(CoreError::InvalidSpec(
-                "cni is Cilium but cilium options are missing".to_string(),
-            ));
-        }
+        // Cilium without explicit options is valid: build_plan resolves the
+        // defaults (which include the Cilium ingress controller).
+        (Cni::Cilium, Some(_)) | (Cni::Cilium, None) => {}
         (_, Some(_)) => {
             return Err(CoreError::InvalidSpec(
                 "cilium options are set but cni is not Cilium".to_string(),
@@ -266,7 +279,9 @@ pub fn validate(spec: &ClusterSpec) -> Result<()> {
 
     if spec.ingress == Some(IngressController::Cilium) {
         let ok = match (spec.cni, &spec.cilium) {
+            // None resolves to the defaults (ingress=true) at plan build.
             (Cni::Cilium, Some(cilium)) => cilium.ingress,
+            (Cni::Cilium, None) => true,
             _ => false,
         };
         if !ok {
@@ -601,14 +616,29 @@ mod tests {
     fn cilium_requires_options_and_vice_versa() {
         let mut spec = base_spec();
         spec.cni = Cni::Cilium;
-        assert!(validate(&spec).is_err());
-
-        spec.cilium = Some(CiliumOptions::default());
-        assert!(validate(&spec).is_ok());
+        assert!(
+            validate(&spec).is_ok(),
+            "cilium without options resolves to defaults at plan build"
+        );
 
         let mut spec = base_spec();
         spec.cilium = Some(CiliumOptions::default());
-        assert!(validate(&spec).is_err());
+        assert!(
+            validate(&spec).is_err(),
+            "cilium options without cilium cni must fail"
+        );
+    }
+
+    #[test]
+    fn cilium_defaults_include_ingress_controller() {
+        let options = CiliumOptions::default();
+        assert!(
+            options.ingress,
+            "default cilium options enable the ingress controller"
+        );
+        assert!(!options.api_gateway);
+        assert!(!options.hubble);
+        assert!(!options.mesh);
     }
 
     #[test]
@@ -695,14 +725,21 @@ mod tests {
         assert!(validate(&spec).is_err());
 
         spec.cni = Cni::Cilium;
-        spec.cilium = Some(CiliumOptions::default());
-        assert!(validate(&spec).is_err(), "needs cilium.ingress == true");
-
         spec.cilium = Some(CiliumOptions {
-            ingress: true,
+            ingress: false,
             ..CiliumOptions::default()
         });
+        assert!(validate(&spec).is_err(), "needs cilium.ingress == true");
+
+        spec.cilium = Some(CiliumOptions::default());
         assert!(validate(&spec).is_ok());
+
+        // None options resolve to the defaults (ingress=true) at plan
+        // build, so the combination is satisfiable.
+        let mut spec = base_spec();
+        spec.cni = Cni::Cilium;
+        spec.ingress = Some(IngressController::Cilium);
+        assert!(validate(&spec).is_ok(), "cilium None resolves to defaults");
     }
 
     #[test]

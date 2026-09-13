@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
-use eframe::egui;
+use eframe::egui::{self, RichText};
 use kindboard_core::ClusterState;
 
 use crate::bus::{CoreCommand, CoreEvent, OpGen};
@@ -28,6 +28,18 @@ use crate::views::wizard::{self, WizardAction, WizardState};
 
 /// Frame tick while something is running (progress, logs, auto-refresh).
 const ACTIVE_TICK: Duration = Duration::from_millis(100);
+
+/// Repaint cadence while tool detection is in flight (keeps the detect
+/// watchdog ticking).
+const DETECT_TICK: Duration = Duration::from_secs(2);
+
+/// A detection run taking longer than this is considered stalled and is
+/// re-issued (bounded). Detection probes tools concurrently; the worst
+/// legitimate run is a single 30 s per-tool timeout plus exec overhead.
+const DETECT_WATCHDOG: Duration = Duration::from_secs(60);
+
+/// Maximum watchdog re-issues per detection run.
+const DETECT_MAX_RETRIES: u32 = 3;
 
 /// Which tab is active.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +57,28 @@ pub struct Banner {
     pub text: String,
     /// Error (red) vs notice (blue).
     pub is_error: bool,
+}
+
+/// Dev/CI screenshot modes driven from the command line (documentation,
+/// headless verification). The About window's manual capture is separate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScreenshotMode {
+    /// Capture once after the first rendered frame (and after `delay` from
+    /// startup), save to this path, then close the app.
+    Once {
+        /// Destination PNG.
+        path: std::path::PathBuf,
+        /// Wait before capturing (lets async state like tool detection
+        /// settle).
+        delay: std::time::Duration,
+    },
+    /// Capture every N seconds into a directory (timestamped filenames).
+    Every {
+        /// Seconds between captures.
+        interval: std::time::Duration,
+        /// Destination directory (created on demand).
+        dir: std::path::PathBuf,
+    },
 }
 
 /// The main application state.
@@ -69,6 +103,16 @@ pub struct KindboardApp {
     wizard_open: bool,
     /// About window open.
     about_open: bool,
+    /// Dev/CI screenshot mode (None in normal use).
+    screenshot: Option<ScreenshotMode>,
+    /// The one-shot screenshot request was sent (waiting for the reply).
+    screenshot_pending: bool,
+    /// Frames rendered so far (used to capture after the first paint).
+    frames: u64,
+    /// App start time (used by the one-shot delay).
+    started: std::time::Instant,
+    /// Last periodic capture instant.
+    last_capture: std::time::Instant,
     /// Global banners.
     banners: Vec<Banner>,
     /// Command bus is full (warning badge).
@@ -94,6 +138,11 @@ impl KindboardApp {
             wizard: None,
             wizard_open: false,
             about_open: false,
+            screenshot: None,
+            screenshot_pending: false,
+            frames: 0,
+            started: std::time::Instant::now(),
+            last_capture: std::time::Instant::now(),
             banners: Vec::new(),
             bus_warning: false,
         };
@@ -103,6 +152,12 @@ impl KindboardApp {
         app.issue(CoreCommand::DetectTools);
         app.issue(CoreCommand::CheckDockerDaemon);
         app
+    }
+
+    /// Enable a dev/CI screenshot mode (see [`ScreenshotMode`]).
+    pub fn with_screenshot(mut self, mode: ScreenshotMode) -> Self {
+        self.screenshot = Some(mode);
+        self
     }
 
     /// Enqueue a command without ever blocking.
@@ -355,6 +410,12 @@ impl KindboardApp {
                     is_error: true,
                 });
             }
+            CoreEvent::Notice { message } => {
+                self.banners.push(Banner {
+                    text: message,
+                    is_error: false,
+                });
+            }
         }
     }
 
@@ -397,8 +458,48 @@ impl KindboardApp {
                 _ => None,
             })
         });
-        if let Some(image) = image {
-            match about::save_screenshot(&image) {
+        let Some(image) = image else { return };
+        match &self.screenshot {
+            Some(ScreenshotMode::Once { path, .. }) => {
+                match about::save_screenshot_to(&image, path) {
+                    Ok(saved) => {
+                        self.banners.push(Banner {
+                            text: format!("screenshot saved to {}", saved.display()),
+                            is_error: false,
+                        });
+                    }
+                    Err(err) => {
+                        // The app closes right after; make the failure
+                        // visible on stderr too (CI consumes the log).
+                        log::error!("screenshot failed: {err}");
+                        self.banners.push(Banner {
+                            text: format!("screenshot failed: {err}"),
+                            is_error: true,
+                        });
+                    }
+                }
+                self.screenshot_pending = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Some(ScreenshotMode::Every { dir, .. }) => match about::screenshot_path(dir) {
+                Some(path) => {
+                    if let Err(err) = about::save_screenshot_to(&image, &path) {
+                        log::error!("screenshot failed: {err}");
+                        self.banners.push(Banner {
+                            text: format!("screenshot failed: {err}"),
+                            is_error: true,
+                        });
+                    }
+                }
+                None => {
+                    log::error!("screenshot failed: could not create {}", dir.display());
+                    self.banners.push(Banner {
+                        text: format!("screenshot failed: could not create {}", dir.display()),
+                        is_error: true,
+                    });
+                }
+            },
+            None => match about::save_screenshot(&image) {
                 Ok(path) => {
                     self.banners.push(Banner {
                         text: format!("screenshot saved to {}", path.display()),
@@ -411,7 +512,42 @@ impl KindboardApp {
                         is_error: true,
                     });
                 }
+            },
+        }
+    }
+
+    /// Drive dev/CI screenshot modes: request captures per the mode's
+    /// cadence (and keep the app repainting for periodic mode).
+    fn drive_screenshot(&mut self, ctx: &egui::Context) {
+        self.frames = self.frames.wrapping_add(1);
+        match &self.screenshot {
+            Some(ScreenshotMode::Once { delay, .. }) => {
+                // Capture on the second frame (so the first frame has been
+                // painted; the command snapshots at frame end) and after the
+                // requested delay (so async state can settle). Keep
+                // repainting until the capture fires — otherwise egui stops
+                // rendering (no input) and a delayed capture never happens.
+                if self.frames >= 2 && self.started.elapsed() >= *delay && !self.screenshot_pending
+                {
+                    self.screenshot_pending = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                        egui::UserData::default(),
+                    ));
+                }
+                if !self.screenshot_pending {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+                }
             }
+            Some(ScreenshotMode::Every { interval, .. }) => {
+                if self.last_capture.elapsed() >= *interval {
+                    self.last_capture = std::time::Instant::now();
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                        egui::UserData::default(),
+                    ));
+                }
+                ctx.request_repaint_after(*interval);
+            }
+            None => {}
         }
     }
 
@@ -521,8 +657,17 @@ impl KindboardApp {
                     let selected =
                         matches!(&self.active, ActiveTab::Cluster(name) if name == &tab.name);
                     ui.horizontal(|ui| {
+                        // The cluster name must stay readable in both states:
+                        // explicit high-contrast text on the selected tab.
+                        let label = if selected {
+                            RichText::new(format!("  {}  ", tab.name))
+                                .strong()
+                                .color(theme::ON_ACCENT)
+                        } else {
+                            RichText::new(format!("  {}  ", tab.name))
+                        };
                         if ui
-                            .selectable_label(selected, format!("  {}  ", tab.name))
+                            .selectable_label(selected, label)
                             .on_hover_text("Open the cluster tab")
                             .clicked()
                         {
@@ -616,6 +761,35 @@ impl KindboardApp {
                         .and_then(|report| report.clusters.iter().find(|entry| entry.name == name))
                         .and_then(|entry| match &entry.state {
                             ClusterState::Missing(record) => Some(record.spec.clone()),
+                            _ => None,
+                        });
+                    if let Some(spec) = spec {
+                        let op_gen = self.next_op_gen(&name);
+                        self.ops.insert(
+                            name.clone(),
+                            OpPanel::start(OpKind::Recreate, name.clone(), op_gen),
+                        );
+                        self.issue(CoreCommand::RecreateCluster {
+                            name,
+                            spec: Box::new(spec),
+                            op_gen,
+                        });
+                    }
+                }
+                OverviewCmd::Scale { name, workers } => {
+                    // Guided recreate from the stored spec with a new
+                    // worker count (the card's node-count control).
+                    let spec = self
+                        .overview
+                        .report
+                        .as_ref()
+                        .and_then(|report| report.clusters.iter().find(|entry| entry.name == name))
+                        .and_then(|entry| match &entry.state {
+                            ClusterState::Managed(record) => {
+                                let mut spec = record.spec.clone();
+                                spec.worker_count = workers;
+                                Some(spec)
+                            }
                             _ => None,
                         });
                     if let Some(spec) = spec {
@@ -728,13 +902,37 @@ impl KindboardApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
         }
     }
+
+    /// Self-healing for tool detection: the worker's detect run can stall
+    /// (rare race); re-issue it after a stall threshold, bounded, and keep
+    /// the UI repainting while a run is in flight so the watchdog actually
+    /// ticks.
+    fn watch_detect(&mut self, ctx: &egui::Context) {
+        if self.overview.deps.detecting {
+            ctx.request_repaint_after(DETECT_TICK);
+            if self.overview.deps.detect_stalled(DETECT_WATCHDOG)
+                && self.overview.deps.detect_retries < DETECT_MAX_RETRIES
+            {
+                self.overview.deps.detect_retries += 1;
+                self.overview.deps.begin_detect();
+                log::warn!(
+                    "tool detection stalled; re-running (attempt {}/{})",
+                    self.overview.deps.detect_retries,
+                    DETECT_MAX_RETRIES
+                );
+                self.issue(CoreCommand::DetectTools);
+            }
+        }
+    }
 }
 
 impl eframe::App for KindboardApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_events();
         self.handle_shortcuts(ctx);
+        self.drive_screenshot(ctx);
         self.poll_screenshot(ctx);
+        self.watch_detect(ctx);
         if self.needs_tick() {
             ctx.request_repaint_after(ACTIVE_TICK);
         }

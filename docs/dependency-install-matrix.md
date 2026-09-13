@@ -94,6 +94,7 @@ All four platform variants (linux/darwin × amd64/arm64) are pinned. A digest mi
 - **brew:** `brew install kubectx`. **dnf/apt/pacman:** not in default repos (AUR `kubectx`) → binary.
 - **Binary:** `https://github.com/ahmetb/kubectx/releases/download/v0.11.0/kubectx_v0.11.0_{linux,darwin}_{x86_64,arm64}.tar.gz` — a compiled Go binary (since v0.10.0); kindboard extracts `kubectx` to `~/.local/bin` and `chmod +x`.
 - **kubens:** ships in a separate upstream archive (`kubens_v0.11.0_*.tar.gz`) and is **not** installed by kindboard; available via `brew install kubectx` if needed.
+- **Walkthrough:** [docs/howtos/install-kubectx.md](howtos/install-kubectx.md) (step-by-step with screenshots).
 
 ### kustomize
 

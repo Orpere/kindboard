@@ -19,7 +19,9 @@ A fully open-source desktop dashboard to run and manage [kind](https://kind.sigs
 - **Kubeconfig lifecycle** — every cluster is added as a context to your default kubeconfig on create and removed on destroy (verified and repaired even for clusters created outside the app).
 - **Per-cluster tabs with a live topology diagram** — namespaces, workloads, pods, services and ingresses as a layered graph with status colors, pan/zoom, click-to-inspect and opt-in auto-refresh.
 - **Log watching** — node containers via `docker logs -f` and workload pods via `kubectl logs -f`, in bounded, follow-mode ring buffers.
-- **Full cluster management** — scale workers, delete nodes (guided recreate from saved settings — kind has no node-level commands), destroy with a type-the-name confirmation popup, and export logs/kubeconfig.
+- **Full cluster management** — scale workers up/down from the cluster card, delete individual worker nodes (click a node → guided, secure recreate — kind has no node-level commands), destroy with a type-the-name confirmation popup, and export logs/kubeconfig.
+- **k9s integration** — an "Open in k9s" button on every cluster card and tab launches k9s for that cluster in a new terminal.
+- **Official tool logos** — deps panel and buttons use the official project logos (kubectl uses the Kubernetes logo); tools without one (kubectx) get a monogram.
 
 > **Scaling note:** kind fixes the node topology at creation time. kindboard implements
 > "scale workers" / "delete node" as a one-click guided recreate that preserves all
@@ -50,7 +52,7 @@ make build-all  # also try linux aarch64 and darwin targets (skips unbuildable o
 | `make run` | Run the desktop app (debug) |
 | `make check` | All quality gates: `fmt --check`, `clippy -D warnings`, tests |
 | `make test` | Unit + integration tests (e2e skipped unless `KINDBOARD_E2E=1`) |
-| `make e2e` | Full suite including real-kind e2e (requires docker + kind; throwaway `kbtest-*` clusters) |
+| `make e2e` | Full suite including real-kind e2e (requires docker + kind; throwaway `kbtest-*` clusters). Covers cluster create/delete, kubeconfig merge, topology, and the CNI matrix (flannel/calico/cilium full installs) |
 | `make audit` | RustSec advisory scan (needs `cargo install cargo-audit`) |
 | `make build` / `make dist` | Release build into `dist/` + `SHA256SUMS` (runs all gates first) |
 | `make build-all` | Attempt all four targets: linux x86_64/aarch64, darwin x86_64/arm64 |
@@ -67,6 +69,8 @@ Scripts: `scripts/build.sh` (release pipeline, reproducible tarballs) · `script
 | [docs/architecture.md](docs/architecture.md) | System graph, crate layout, async model, failure modes |
 | [docs/contracts.md](docs/contracts.md) | Type-level contracts: spec, commands, provisioning, topology |
 | [docs/dependency-install-matrix.md](docs/dependency-install-matrix.md) | Detection, package names, pinned binary downloads per tool |
+| [docs/howtos/install-kubectx.md](docs/howtos/install-kubectx.md) | **How-to with screenshots:** install kubectx from the Dependencies panel |
+| [docs/howtos/create-cni-clusters.md](docs/howtos/create-cni-clusters.md) | **How-to with screenshots:** flannel, calico and cilium clusters, end to end |
 | [docs/adrs/](docs/adrs/) | Architecture decision records (ADR-0008 … 0012) |
 | [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md) | Logo ownership, sources and trademark notes |
 

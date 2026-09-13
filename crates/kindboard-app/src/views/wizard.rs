@@ -211,6 +211,15 @@ pub fn show(ctx: &egui::Context, state: &mut WizardState) -> WizardAction {
                         .size(11.0),
                 );
             }
+            None if state.cni == Cni::Cilium && state.cilium.ingress => {
+                ui.label(
+                    RichText::new(
+                        "no host ports mapped; the Cilium ingress controller is installed by default (see Cilium extras)",
+                    )
+                    .color(theme::TEXT_DIM)
+                    .size(11.0),
+                );
+            }
             _ => {
                 ui.label(
                     RichText::new(

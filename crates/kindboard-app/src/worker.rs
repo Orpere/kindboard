@@ -36,6 +36,10 @@ use crate::bus::{ClusterLiveStatus, ContextStatus, CoreCommand, CoreEvent, OpGen
 /// Probe timeout for per-cluster status checks (short; the probe only asks
 /// `kind get nodes`).
 const STATUS_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Backstop deadline for a full detection run (worst legitimate case: 8
+/// tools × the 30s per-tool detect timeout, plus margin).
+const DETECT_ALL_DEADLINE: Duration = Duration::from_secs(300);
 /// How long a full event bus may hold a *result* event before it is
 /// dropped (progress lines are always dropped immediately).
 const EVENT_SEND_GRACE: Duration = Duration::from_millis(1000);
@@ -167,7 +171,20 @@ async fn run_loop(
                     }
                     CoreCommand::DetectTools => {
                         let tx = event_tx.clone();
-                        tasks.spawn(async move { do_detect_all(tx).await });
+                        tasks.spawn(async move {
+                            let result =
+                                tokio::time::timeout(DETECT_ALL_DEADLINE, do_detect_all(tx.clone()))
+                                    .await;
+                            if result.is_err() {
+                                // Backstop: even if a detect run stalls, the
+                                // UI must un-stick. The UI-side watchdog
+                                // re-issues detection on its own cadence.
+                                log::warn!(
+                                    "tool detection did not complete within {DETECT_ALL_DEADLINE:?}; emitting ToolsDetectDone"
+                                );
+                                emit_important(&tx, CoreEvent::ToolsDetectDone);
+                            }
+                        });
                     }
                     CoreCommand::CheckDockerDaemon => {
                         let tx = event_tx.clone();
@@ -268,9 +285,19 @@ async fn run_loop(
                             token.cancel();
                         }
                     }
+                    CoreCommand::OpenK9s { name } => {
+                        open_k9s(&name, &event_tx);
+                    }
                 }
             }
-            Some(Ok(())) = tasks.join_next(), if !tasks.is_empty() => {}
+            result = tasks.join_next(), if !tasks.is_empty() => {
+                // Never swallow task failures silently: a panicked/aborted
+                // task must leave a trace (and the UI watchdog re-drives
+                // detection when a run ends without ToolsDetectDone).
+                if let Some(Err(err)) = result {
+                    log::warn!("worker task failed: {err}");
+                }
+            }
         }
     }
 
@@ -289,6 +316,106 @@ fn op_token(cancels: &mut HashMap<String, CancellationToken>, key: &str) -> Canc
         old.cancel();
     }
     token
+}
+
+/// Open k9s for a cluster in a new terminal window (fire-and-forget: the
+/// terminal outlives the app).
+fn open_k9s(name: &str, event_tx: &Sender<CoreEvent>) {
+    let context = KubeconfigStore::kind_context_name(name);
+    let Some(terminal) = detect_terminal() else {
+        emit_important(
+            event_tx,
+            CoreEvent::Error {
+                context: "k9s".to_string(),
+                message:
+                    "no terminal emulator found (set $TERMINAL or install foot/kitty/alacritty)"
+                        .to_string(),
+            },
+        );
+        return;
+    };
+    let argv = k9s_argv(&terminal.to_string_lossy(), &context);
+    match std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(mut child) => {
+            // Reap the detached child in the background (fire-and-forget:
+            // the terminal outlives the app).
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            emit_important(
+                event_tx,
+                CoreEvent::Notice {
+                    message: format!("opened k9s for {name} (context {context}) in a new terminal"),
+                },
+            );
+        }
+        Err(err) => emit_important(
+            event_tx,
+            CoreEvent::Error {
+                context: "k9s".to_string(),
+                message: format!("failed to open {}: {err}", terminal.display()),
+            },
+        ),
+    }
+}
+
+/// Terminals tried in order (env `TERMINAL` wins when set).
+const TERMINAL_CANDIDATES: &[&str] = &[
+    "foot",
+    "kitty",
+    "alacritty",
+    "konsole",
+    "gnome-terminal",
+    "xterm",
+    "x-terminal-emulator",
+];
+
+/// Resolve a terminal emulator to launch k9s in: `$TERMINAL` first, then a
+/// known-good candidate list (first one present on PATH).
+fn detect_terminal() -> Option<PathBuf> {
+    let paths = kindboard_core::deps::path_entries();
+    if let Some(term) = std::env::var_os("TERMINAL") {
+        let term = term.to_string_lossy();
+        if !term.is_empty() {
+            // $TERMINAL may be a bare name or a path.
+            if let Some(found) = kindboard_core::deps::find_in_path(&paths, &term) {
+                return Some(found);
+            }
+            let candidate = PathBuf::from(term.as_ref());
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    TERMINAL_CANDIDATES
+        .iter()
+        .find_map(|candidate| kindboard_core::deps::find_in_path(&paths, candidate))
+}
+
+/// Build the terminal argv that runs `k9s --context <context>`.
+///
+/// Most terminals accept `-e <program> <args...>` (xterm-compatible); kitty
+/// takes the program directly (its short opts have no `-e`) and
+/// gnome-terminal uses `--`.
+fn k9s_argv(terminal: &str, context: &str) -> Vec<String> {
+    let exec_flag = if terminal.ends_with("gnome-terminal") || terminal.ends_with("kitty") {
+        "--"
+    } else {
+        "-e"
+    };
+    vec![
+        terminal.to_string(),
+        exec_flag.to_string(),
+        "k9s".to_string(),
+        "--context".to_string(),
+        context.to_string(),
+    ]
 }
 
 /// Send a droppable event (progress lines, notices).
@@ -403,19 +530,29 @@ async fn probe_status(name: &str) -> ClusterLiveStatus {
     }
 }
 
-/// Detect every registry tool, emitting per-tool events.
+/// Detect every registry tool, emitting per-tool events. Tools are probed
+/// concurrently so the whole run is bounded by the slowest single tool
+/// (30 s timeout), not the sum of all eight — the UI watchdog thresholds
+/// rely on this.
 async fn do_detect_all(event_tx: Sender<CoreEvent>) {
+    let mut tasks = Vec::new();
     for tool in core::registry() {
-        let result = core::detect(tool.id).await.map_err(|err| err.to_string());
-        emit(
-            &event_tx,
-            CoreEvent::DetectedTool {
-                id: tool.id,
-                result,
-            },
-        );
+        let tx = event_tx.clone();
+        tasks.push(tokio::spawn(async move {
+            let result = core::detect(tool.id).await.map_err(|err| err.to_string());
+            emit(
+                &tx,
+                CoreEvent::DetectedTool {
+                    id: tool.id,
+                    result,
+                },
+            );
+        }));
     }
-    emit(&event_tx, CoreEvent::ToolsDetectDone);
+    for task in tasks {
+        let _ = task.await;
+    }
+    emit_important(&event_tx, CoreEvent::ToolsDetectDone);
 }
 
 /// Install one tool, forwarding its streamed install events.
@@ -1013,5 +1150,33 @@ mod tests {
         );
         stop.store(true, Ordering::Relaxed);
         drainer.join().unwrap();
+    }
+
+    #[test]
+    fn k9s_argv_uses_e_flag_and_context() {
+        assert_eq!(
+            k9s_argv("foot", "kind-demo"),
+            vec!["foot", "-e", "k9s", "--context", "kind-demo"]
+        );
+        assert_eq!(
+            k9s_argv("alacritty", "kind-demo"),
+            vec!["alacritty", "-e", "k9s", "--context", "kind-demo"]
+        );
+        // kitty has no -e short flag: the program goes after `--`.
+        assert_eq!(
+            k9s_argv("kitty", "kind-demo"),
+            vec!["kitty", "--", "k9s", "--context", "kind-demo"]
+        );
+        assert_eq!(
+            k9s_argv("gnome-terminal", "kind-demo"),
+            vec!["gnome-terminal", "--", "k9s", "--context", "kind-demo"]
+        );
+    }
+
+    #[test]
+    fn terminal_candidates_include_common_terminals() {
+        assert!(TERMINAL_CANDIDATES.contains(&"foot"));
+        assert!(TERMINAL_CANDIDATES.contains(&"kitty"));
+        assert!(TERMINAL_CANDIDATES.contains(&"alacritty"));
     }
 }

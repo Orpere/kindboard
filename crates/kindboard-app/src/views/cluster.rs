@@ -73,6 +73,13 @@ pub enum TabConfirm {
     Destroy { typed: String },
     /// Recreate (scale): typed name must match.
     Recreate { typed: String },
+    /// Delete a worker node (guided recreate with one fewer worker).
+    DeleteNode {
+        /// Node to remove.
+        node: String,
+        /// Typed cluster name must match.
+        typed: String,
+    },
 }
 
 /// Which log source the picker is on.
@@ -307,6 +314,18 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
                     name: tab.name.clone(),
                 }));
             }
+            ui.horizontal(|ui| {
+                crate::icons::logo_image(ui, kindboard_core::ToolId::K9s, 16.0);
+                if ui
+                    .button("Open in k9s")
+                    .on_hover_text("Open k9s for this cluster in a new terminal")
+                    .clicked()
+                {
+                    cmds.push(TabCmd::Command(CoreCommand::OpenK9s {
+                        name: tab.name.clone(),
+                    }));
+                }
+            });
             if ui
                 .button("Export logs")
                 .on_hover_text("kind export logs to a directory")
@@ -375,6 +394,8 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
                         );
                     }
                     for node in &graph.nodes {
+                        let node_id = format!("node/{}", node.name);
+                        let is_selected = tab.selected.as_deref() == Some(node_id.as_str());
                         ui.horizontal(|ui| {
                             status_dot(
                                 ui,
@@ -384,7 +405,13 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
                                     theme::AMBER
                                 },
                             );
-                            ui.label(&node.name);
+                            if ui
+                                .selectable_label(is_selected, &node.name)
+                                .on_hover_text("Inspect this node")
+                                .clicked()
+                            {
+                                tab.selected = if is_selected { None } else { Some(node_id) };
+                            }
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| match node.role {
@@ -412,10 +439,15 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
         .show(ui, |ui| {
             ui.strong("Details");
             ui.separator();
+            let mut delete_request: Option<String> = None;
             match &tab.topo {
                 Some(graph) => {
                     ScrollArea::vertical().show(ui, |ui| {
-                        diagram::detail_panel(ui, graph, &tab.selected);
+                        if let Some(diagram::DiagramAction::DeleteNode { node }) =
+                            diagram::detail_panel(ui, graph, &tab.selected, tab.has_record())
+                        {
+                            delete_request = Some(node);
+                        }
                     });
                 }
                 None => {
@@ -425,6 +457,12 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
                             .size(11.0),
                     );
                 }
+            }
+            if let Some(node) = delete_request {
+                tab.confirm = Some(TabConfirm::DeleteNode {
+                    node,
+                    typed: String::new(),
+                });
             }
         });
 
@@ -905,12 +943,26 @@ fn show_confirms(ui: &mut egui::Ui, tab: &mut ClusterTab, cmds: &mut Vec<TabCmd>
                 ConfirmAction::Recreate { typed },
             )
         }
+        TabConfirm::DeleteNode { node, typed } => {
+            let target = tab.workers.saturating_sub(1);
+            (
+                "Delete node",
+                format!(
+                    "kind cannot remove a node from a running cluster. Deleting worker \
+                     '{node}' recreates the cluster with {target} worker(s) from its stored \
+                     settings: the old cluster is deleted and all workloads on it are lost."
+                ),
+                ConfirmAction::DeleteNode { node, typed },
+            )
+        }
     };
 
     let mut confirmed = false;
     let mut cancelled = false;
     let mut typed = match &action {
-        ConfirmAction::Destroy { typed } | ConfirmAction::Recreate { typed } => typed.clone(),
+        ConfirmAction::Destroy { typed }
+        | ConfirmAction::Recreate { typed }
+        | ConfirmAction::DeleteNode { typed, .. } => typed.clone(),
     };
     let modal = Modal::new(egui::Id::new("tab-confirm")).show(ui.ctx(), |ui| {
         ui.set_width(430.0);
@@ -929,13 +981,20 @@ fn show_confirms(ui: &mut egui::Ui, tab: &mut ClusterTab, cmds: &mut Vec<TabCmd>
         ui.add_space(8.0);
         let matches = typed.trim() == tab.name;
         ui.horizontal(|ui| {
-            let is_destroy = matches!(action, ConfirmAction::Destroy { .. });
-            let label = if is_destroy { "Destroy" } else { "Recreate" };
+            let label = match action {
+                ConfirmAction::Destroy { .. } => "Destroy",
+                ConfirmAction::DeleteNode { .. } => "Delete & recreate",
+                ConfirmAction::Recreate { .. } => "Recreate",
+            };
+            let fill = match action {
+                ConfirmAction::Destroy { .. } | ConfirmAction::DeleteNode { .. } => theme::RED,
+                ConfirmAction::Recreate { .. } => theme::AMBER,
+            };
             let button = ui.add_enabled(
                 matches,
                 egui::Button::new(RichText::new(label).strong())
-                    .fill(if is_destroy { theme::RED } else { theme::AMBER })
-                    .min_size(egui::vec2(110.0, 30.0)),
+                    .fill(fill)
+                    .min_size(egui::vec2(130.0, 30.0)),
             );
             if button.on_hover_text("Confirm").clicked() {
                 confirmed = true;
@@ -970,11 +1029,21 @@ fn show_confirms(ui: &mut egui::Ui, tab: &mut ClusterTab, cmds: &mut Vec<TabCmd>
                     });
                 }
             }
+            ConfirmAction::DeleteNode { .. } => {
+                // One fewer worker; the guided recreate does the rest.
+                tab.workers = tab.workers.saturating_sub(1);
+                if let Some(spec) = tab.spec_with_workers() {
+                    cmds.push(TabCmd::Recreate {
+                        spec: Box::new(spec),
+                    });
+                }
+            }
         }
     } else if !cancelled {
         tab.confirm = Some(match action {
             ConfirmAction::Destroy { .. } => TabConfirm::Destroy { typed },
             ConfirmAction::Recreate { .. } => TabConfirm::Recreate { typed },
+            ConfirmAction::DeleteNode { node, .. } => TabConfirm::DeleteNode { node, typed },
         });
     }
 }
@@ -983,6 +1052,7 @@ fn show_confirms(ui: &mut egui::Ui, tab: &mut ClusterTab, cmds: &mut Vec<TabCmd>
 enum ConfirmAction {
     Destroy { typed: String },
     Recreate { typed: String },
+    DeleteNode { node: String, typed: String },
 }
 
 #[cfg(test)]

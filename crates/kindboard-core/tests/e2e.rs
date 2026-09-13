@@ -290,3 +290,124 @@ async fn e2e_run_plan_executes_full_flow() {
     assert!(clusters.contains(&name));
     cleanup_cluster(&name).await;
 }
+
+/// CNI matrix: one cluster each for flannel, calico and cilium, running the
+/// FULL provision plan (kind create → kubeconfig merge → CNI install →
+/// readiness verification). The cilium cluster enables the complete cilium
+/// stack: Gateway API controller, Hubble (relay + UI), the Cilium ingress
+/// controller and clustermesh. Each cluster is then verified live: kind
+/// lists it, the merged kubeconfig context exists, and a kube-rs topology
+/// read returns ready nodes.
+///
+/// Clusters are deleted afterwards unless `KINDBOARD_E2E_KEEP=1` (manual
+/// inspection / screenshots; names then use the `kbcn-*` prefix).
+///
+/// `KINDBOARD_E2E_SKIP_CILIUM=1` skips the cilium leg with a notice. Use it
+/// on hosts where the cilium agent cannot start for reasons outside
+/// kindboard (e.g. kernel 7.x changed the `bpf_set_retval` helper
+/// signature; cilium's startup probe fails with "R1 is not a scalar" and
+/// the agent crash-loops — see docs/howtos/create-cni-clusters.md).
+#[tokio::test]
+async fn e2e_cni_matrix_flannel_calico_cilium() {
+    let Some(()) = require_e2e() else { return };
+    let _guard = e2e_lock().lock().await;
+    if !docker_available().await {
+        eprintln!("SKIP: docker daemon not reachable");
+        return;
+    }
+    let keep = std::env::var("KINDBOARD_E2E_KEEP").as_deref() == Ok("1");
+    let skip_cilium = std::env::var("KINDBOARD_E2E_SKIP_CILIUM").as_deref() == Ok("1");
+    for (cni, tag) in [
+        (kindboard_core::Cni::Flannel, "flannel"),
+        (kindboard_core::Cni::Calico, "calico"),
+        (kindboard_core::Cni::Cilium, "cilium"),
+    ] {
+        if cni == kindboard_core::Cni::Cilium && skip_cilium {
+            eprintln!(
+                "SKIP: cilium leg disabled (KINDBOARD_E2E_SKIP_CILIUM=1); \
+                 cilium agent cannot start on this host kernel"
+            );
+            continue;
+        }
+        let name = if keep {
+            format!("kbcn-{tag}")
+        } else {
+            format!("kbtest-cni-{tag}-{}", std::process::id())
+        };
+        let mut spec = ClusterSpec {
+            name: name.clone(),
+            cni,
+            ..ClusterSpec::default()
+        };
+        if cni == kindboard_core::Cni::Cilium {
+            // Exercise the FULL cilium stack: Gateway API + Hubble +
+            // ingress controller + clustermesh.
+            spec.cilium = Some(kindboard_core::CiliumOptions {
+                api_gateway: true,
+                hubble: true,
+                ingress: true,
+                mesh: true,
+                cluster_id: 7,
+                cluster_name: name.clone(),
+            });
+        }
+        let data_dir = test_data_dir();
+        let kubeconfig_path = test_kubeconfig_path();
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let plan = kindboard_core::build_plan(&spec, &data_dir, &kubeconfig_path).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let result = tokio::time::timeout(
+            Duration::from_secs(900),
+            kindboard_core::run_plan(&plan, None, &tx),
+        )
+        .await;
+        let mut lines = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let ProvisionEvent::StepOutput { line, .. } = event {
+                lines.push(line);
+            }
+        }
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                if !keep {
+                    cleanup_cluster(&name).await;
+                }
+                panic!("{tag} plan failed: {err}\noutput: {lines:?}");
+            }
+            Err(_) => {
+                if !keep {
+                    cleanup_cluster(&name).await;
+                }
+                panic!("{tag} plan timed out after 15 min");
+            }
+        }
+        // Live verification: kind lists the cluster, the merged kubeconfig
+        // has the context, and a real topology read returns ready nodes.
+        let output = KindCommand::KindGetClusters.to_cmd().run().await.unwrap();
+        let clusters = parse_kind_get_clusters(&output.stdout());
+        assert!(
+            clusters.contains(&name),
+            "{tag}: cluster missing from kind: {clusters:?}"
+        );
+        let store = KubeconfigStore::load_from(kubeconfig_path.clone()).unwrap();
+        assert!(
+            store.verify_context(&format!("kind-{name}")),
+            "{tag}: merged kubeconfig context missing"
+        );
+        let client = K8sClient::from_kubeconfig(store.config().clone())
+            .await
+            .unwrap();
+        let topology = client.poll_topology().await.unwrap();
+        assert!(!topology.namespaces.is_empty(), "{tag}: no namespaces");
+        assert!(
+            topology.nodes.iter().any(|node| node.ready),
+            "{tag}: no ready nodes"
+        );
+        if keep {
+            eprintln!("KEEP: cluster {name} left running (KINDBOARD_E2E_KEEP=1)");
+        } else {
+            cleanup_cluster(&name).await;
+        }
+    }
+}

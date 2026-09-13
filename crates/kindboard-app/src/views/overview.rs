@@ -31,15 +31,18 @@ pub struct OverviewState {
     pub destroy: Option<DestroyConfirm>,
 }
 
-/// Typed-name destroy confirmation state.
+/// Typed-name confirmation state (destroy or scale).
 #[derive(Default)]
 pub struct DestroyConfirm {
-    /// Cluster being destroyed.
+    /// Cluster being destroyed/scaled.
     pub name: String,
     /// What the user typed so far.
     pub typed: String,
     /// Whether this destroys only the stored record (missing cluster).
     pub record_only: bool,
+    /// Scale target: when `Some`, this confirms a guided recreate to that
+    /// worker count instead of a destroy.
+    pub scale_to: Option<u32>,
 }
 
 /// Actions the overview wants the app to perform (gens are assigned by the
@@ -58,6 +61,13 @@ pub enum OverviewCmd {
     Recreate {
         /// Cluster name.
         name: String,
+    },
+    /// Guided recreate with a new worker count (scale up/down).
+    Scale {
+        /// Cluster name.
+        name: String,
+        /// New worker count.
+        workers: u32,
     },
     /// Open the cluster tab.
     OpenCluster(String),
@@ -177,32 +187,48 @@ pub fn show(
 
     ui.add_space(8.0);
 
-    // Destroy confirmation modal (state is taken out for the frame to keep
-    // the borrow checker happy without unsafe shortcuts).
+    // Destroy/scale confirmation modal (state is taken out for the frame to
+    // keep the borrow checker happy without unsafe shortcuts).
     if let Some(mut confirm) = state.destroy.take() {
         let mut confirmed = false;
         let mut cancelled = false;
         let modal = Modal::new(egui::Id::new("destroy-confirm")).show(ui.ctx(), |ui| {
             ui.set_width(400.0);
-            ui.heading("Destroy cluster");
-            ui.add_space(4.0);
-            if confirm.record_only {
-                ui.label(
-                    RichText::new(
-                        "This cluster is already gone (only its stored record remains). \
-                         Removing the record and its kubeconfig context cannot be undone.",
-                    )
-                    .color(theme::RED),
-                );
-            } else {
-                ui.label(
-                    RichText::new(
-                        "Destroying a cluster deletes its node containers, its kubeconfig \
-                         context and its stored record. All workloads and data on the \
-                         cluster are lost forever.",
-                    )
-                    .color(theme::RED),
-                );
+            match confirm.scale_to {
+                Some(workers) => {
+                    ui.heading("Apply scale (recreate)");
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "kind cannot add or remove nodes on a running cluster. Scaling to \
+                             {workers} worker(s) recreates the cluster from its stored spec: \
+                             the old cluster is deleted and all workloads on it are lost."
+                        ))
+                        .color(theme::RED),
+                    );
+                }
+                None => {
+                    ui.heading("Destroy cluster");
+                    ui.add_space(4.0);
+                    if confirm.record_only {
+                        ui.label(
+                            RichText::new(
+                                "This cluster is already gone (only its stored record remains). \
+                                 Removing the record and its kubeconfig context cannot be undone.",
+                            )
+                            .color(theme::RED),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new(
+                                "Destroying a cluster deletes its node containers, its kubeconfig \
+                                 context and its stored record. All workloads and data on the \
+                                 cluster are lost forever.",
+                            )
+                            .color(theme::RED),
+                        );
+                    }
+                }
             }
             ui.add_space(6.0);
             ui.label("Type the cluster name to confirm:");
@@ -215,17 +241,18 @@ pub fn show(
             );
             ui.add_space(8.0);
             let matches = confirm.typed.trim() == confirm.name;
+            let (label, fill) = match confirm.scale_to {
+                Some(_) => ("Scale", theme::AMBER),
+                None => ("Destroy", theme::RED),
+            };
             ui.horizontal(|ui| {
-                let destroy = ui.add_enabled(
+                let commit = ui.add_enabled(
                     matches,
-                    egui::Button::new(RichText::new("Destroy").strong())
-                        .fill(theme::RED)
+                    egui::Button::new(RichText::new(label).strong())
+                        .fill(fill)
                         .min_size(egui::vec2(110.0, 30.0)),
                 );
-                if destroy
-                    .on_hover_text("Permanently destroy the cluster")
-                    .clicked()
-                {
+                if commit.on_hover_text("Confirm").clicked() {
                     confirmed = true;
                 }
                 if ui.button("Cancel").clicked() {
@@ -244,10 +271,16 @@ pub fn show(
             cancelled = true;
         }
         if confirmed {
-            cmds.push(OverviewCmd::Destroy {
-                name: confirm.name,
-                record_only: confirm.record_only,
-            });
+            match confirm.scale_to {
+                Some(workers) => cmds.push(OverviewCmd::Scale {
+                    name: confirm.name,
+                    workers,
+                }),
+                None => cmds.push(OverviewCmd::Destroy {
+                    name: confirm.name,
+                    record_only: confirm.record_only,
+                }),
+            }
         } else if !cancelled {
             state.destroy = Some(confirm);
         }
@@ -348,6 +381,18 @@ fn render_card(
                 {
                     open = true;
                 }
+                ui.horizontal(|ui| {
+                    crate::icons::logo_image(ui, kindboard_core::ToolId::K9s, 14.0);
+                    if ui
+                        .button("k9s")
+                        .on_hover_text("Open k9s for this cluster in a new terminal")
+                        .clicked()
+                    {
+                        cmds.push(OverviewCmd::Command(CoreCommand::OpenK9s {
+                            name: row.name.clone(),
+                        }));
+                    }
+                });
                 if ui
                     .button("Export kubeconfig")
                     .on_hover_text("kind get kubeconfig + set as current context")
@@ -368,6 +413,52 @@ fn render_card(
                     cmds.push(OverviewCmd::Recreate {
                         name: row.name.clone(),
                     });
+                }
+                // Scale up/down (guided recreate) for managed clusters: the
+                // stepper only stages a value; committing requires the
+                // typed-name confirmation like every other destructive
+                // action.
+                if let Some(record) = &row.record
+                    && row.source_label != "Missing"
+                {
+                    let mut workers = record.spec.worker_count;
+                    let mut apply_request = false;
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("nodes:").size(11.0).color(theme::TEXT_DIM));
+                        let response = ui.add(
+                            egui::DragValue::new(&mut workers)
+                                .range(0..=kindboard_core::MAX_WORKERS),
+                        );
+                        let changed = workers != record.spec.worker_count;
+                        response.on_hover_text(
+                            "Worker nodes (the control-plane is always added). Scaling recreates the cluster.",
+                        );
+                        let apply = ui.add_enabled(
+                            changed,
+                            egui::Button::new(
+                                RichText::new(if workers > record.spec.worker_count {
+                                    "Scale up"
+                                } else {
+                                    "Scale down"
+                                })
+                                .size(11.0),
+                            ),
+                        );
+                        if apply
+                            .on_hover_text("Apply: opens the confirmation (recreates the cluster; workloads are lost)")
+                            .clicked()
+                        {
+                            apply_request = true;
+                        }
+                    });
+                    if apply_request {
+                        state.destroy = Some(DestroyConfirm {
+                            name: row.name.clone(),
+                            typed: String::new(),
+                            record_only: false,
+                            scale_to: Some(workers),
+                        });
+                    }
                 }
                 let destroy_label = if row.source_label == "Missing" {
                     "Discard record"
@@ -392,6 +483,7 @@ fn render_card(
                     name,
                     typed: String::new(),
                     record_only,
+                    scale_to: None,
                 });
             }
         });

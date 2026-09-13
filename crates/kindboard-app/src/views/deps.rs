@@ -21,6 +21,10 @@ const INSTALL_LOG_CAP: usize = 400;
 pub struct DepsState {
     /// Detection in flight.
     pub detecting: bool,
+    /// When the current detection run started (None when idle).
+    pub detect_started: Option<std::time::Instant>,
+    /// Watchdog retries issued for the current run.
+    pub detect_retries: u32,
     /// Per-tool detection outcome.
     pub results: HashMap<ToolId, Result<ToolStatus, String>>,
     /// Docker daemon state (separate from CLI presence).
@@ -68,6 +72,8 @@ impl DepsState {
             }
             CoreEvent::ToolsDetectDone => {
                 self.detecting = false;
+                self.detect_started = None;
+                self.detect_retries = 0;
             }
             CoreEvent::DockerDaemon { state } => {
                 self.docker = Some(state.clone());
@@ -118,6 +124,17 @@ impl DepsState {
     /// Start detecting (UI calls the command itself; this just marks).
     pub fn begin_detect(&mut self) {
         self.detecting = true;
+        self.detect_started = Some(std::time::Instant::now());
+    }
+
+    /// Whether the current detection run has been running for at least
+    /// `threshold` without finishing (a worker stall). Never true while
+    /// idle.
+    pub fn detect_stalled(&self, threshold: std::time::Duration) -> bool {
+        self.detecting
+            && self
+                .detect_started
+                .is_some_and(|started| started.elapsed() >= threshold)
     }
 
     /// Open the inline install area and pre-seed it with the plan preview.
@@ -355,5 +372,53 @@ fn daemon_state_text(state: &DockerDaemonState) -> String {
         DockerDaemonState::NotRunning { reason } => {
             format!("not running ({})", truncate(reason, 80))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn begin_detect_marks_running_and_started() {
+        let mut state = DepsState::default();
+        state.begin_detect();
+        assert!(state.detecting);
+        assert!(state.detect_started.is_some());
+        assert!(!state.detect_stalled(std::time::Duration::from_secs(1_000_000)));
+        assert!(state.detect_stalled(std::time::Duration::ZERO));
+    }
+
+    #[test]
+    fn detect_done_resets_watchdog_state() {
+        let mut state = DepsState::default();
+        state.begin_detect();
+        state.detect_retries = 2;
+        state.handle_event(&CoreEvent::ToolsDetectDone);
+        assert!(!state.detecting);
+        assert!(state.detect_started.is_none());
+        assert_eq!(state.detect_retries, 0);
+        assert!(!state.detect_stalled(std::time::Duration::ZERO));
+    }
+
+    #[test]
+    fn stalled_is_false_when_idle() {
+        let state = DepsState::default();
+        assert!(!state.detect_stalled(std::time::Duration::ZERO));
+    }
+
+    #[test]
+    fn detected_tool_updates_results() {
+        let mut state = DepsState::default();
+        let result: Result<kindboard_core::ToolStatus, String> =
+            Ok(kindboard_core::ToolStatus::NotInstalled);
+        state.handle_event(&CoreEvent::DetectedTool {
+            id: kindboard_core::ToolId::Kubectx,
+            result: result.clone(),
+        });
+        assert_eq!(
+            state.results.get(&kindboard_core::ToolId::Kubectx),
+            Some(&result)
+        );
     }
 }

@@ -62,6 +62,19 @@ pub fn save_screenshot(image: &ColorImage) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// Encode an egui screenshot and save it to an explicit path, creating
+/// parent directories as needed. Returns the path written.
+pub fn save_screenshot_to(image: &ColorImage, path: &std::path::Path) -> Result<PathBuf, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("could not create {}: {err}", parent.display()))?;
+    }
+    let bytes = encode_screenshot(image)?;
+    std::fs::write(path, bytes)
+        .map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+    Ok(path.to_path_buf())
+}
+
 /// Render the About window. Returns `true` when a screenshot was requested
 /// (the app sends the viewport command).
 pub fn show(ctx: &egui::Context, open: &mut bool) -> bool {
@@ -102,8 +115,8 @@ pub fn show(ctx: &egui::Context, open: &mut bool) -> bool {
             ui.label(
                 RichText::new(
                     "Built with egui/eframe, kind, kube-rs and the Kubernetes ecosystem. \
-                     Tool icons are monogram placeholders; logo tiles are added by the \
-                     docs phase.",
+                     Tool icons are the official project logos (kubectl uses the Kubernetes \
+                     logo; kubectx has none). Logos belong to their respective owners.",
                 )
                 .color(theme::TEXT_DIM)
                 .size(11.0),

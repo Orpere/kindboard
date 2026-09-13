@@ -146,6 +146,11 @@ pub enum CoreCommand {
         /// Cluster name.
         name: String,
     },
+    /// Open k9s for a cluster in a new terminal window (fire-and-forget).
+    OpenK9s {
+        /// Cluster name (context: `kind-<name>`).
+        name: String,
+    },
     /// Stop the worker loop (sent on app exit).
     Shutdown,
 }
@@ -276,6 +281,12 @@ pub enum CoreEvent {
     Error {
         /// Where it happened (e.g. "reconcile").
         context: String,
+        /// Human-readable message.
+        message: String,
+    },
+    /// An informational notice (shown as a dismissable banner, not an
+    /// error).
+    Notice {
         /// Human-readable message.
         message: String,
     },
