@@ -70,18 +70,29 @@ pub struct OpPanel {
     pub output: VecDeque<String>,
     /// `Some` once the operation finished.
     pub finished: Option<Result<(), String>>,
+    /// Whether to use kind-style progress formatting.
+    pub create_style: bool,
+    /// Whether the header line has already been printed.
+    pub header_printed: bool,
+    /// Index into `output` of the in-progress "…" line, if any.
+    pub pending_step: Option<usize>,
 }
 
 impl OpPanel {
     /// Open a panel for a freshly issued operation.
     pub fn start(kind: OpKind, name: impl Into<String>, op_gen: OpGen) -> Self {
+        let name = name.into();
+        let create_style = matches!(kind, OpKind::Create | OpKind::Recreate);
         OpPanel {
             kind,
-            name: name.into(),
+            name,
             op_gen,
             steps: Vec::new(),
             output: VecDeque::with_capacity(OP_OUTPUT_CAP),
             finished: None,
+            create_style,
+            header_printed: false,
+            pending_step: None,
         }
     }
 
@@ -119,27 +130,83 @@ impl OpPanel {
             ProvisionEvent::StepStarted { id } => {
                 let step = self.step_mut(id);
                 step.status = StepStatus::Running;
-                self.push_line(format!("[{}] started", friendly_step(id)));
+                if self.create_style {
+                    if !self.header_printed {
+                        let verb = match self.kind {
+                            OpKind::Create => "Creating",
+                            OpKind::Recreate => "Recreating",
+                            OpKind::Destroy => unreachable!("create_style excludes Destroy"),
+                        };
+                        self.push_line(format!("{verb} cluster \"{}\" ...", self.name));
+                        self.header_printed = true;
+                    }
+                    let index = self.output.len();
+                    self.push_line(format!("   {} ...", friendly_step(id)));
+                    self.pending_step = Some(index);
+                } else {
+                    self.push_line(format!("[{}] started", friendly_step(id)));
+                }
             }
             ProvisionEvent::StepOutput { id, line } => {
-                self.push_line(format!("[{id}] {line}"));
+                self.push_line(format!("[{}] {line}", friendly_step(id)));
             }
             ProvisionEvent::StepFinished { id } => {
                 let step = self.step_mut(id);
                 step.status = StepStatus::Done;
-                self.push_line(format!("[{}] finished", friendly_step(id)));
+                if self.create_style {
+                    let line = format!(" \u{2713} {}", friendly_step(id));
+                    if let Some(index) = self
+                        .pending_step
+                        .take()
+                        .filter(|index| *index < self.output.len())
+                    {
+                        self.output[index] = line;
+                    } else {
+                        self.push_line(line);
+                    }
+                } else {
+                    self.push_line(format!("[{}] finished", friendly_step(id)));
+                }
             }
             ProvisionEvent::StepFailed { id, error } => {
                 let step = self.step_mut(id);
                 step.status = StepStatus::Failed;
-                self.push_line(format!("[{}] FAILED: {error}", friendly_step(id)));
+                if self.create_style {
+                    let line = format!(" \u{2717} {}", friendly_step(id));
+                    if let Some(index) = self
+                        .pending_step
+                        .take()
+                        .filter(|index| *index < self.output.len())
+                    {
+                        self.output[index] = line;
+                    } else {
+                        self.push_line(line);
+                    }
+                    self.push_line(format!("  {error}"));
+                } else {
+                    self.push_line(format!("[{}] FAILED: {error}", friendly_step(id)));
+                }
             }
             ProvisionEvent::PlanFinished { success } => {
-                self.push_line(if *success {
-                    "plan finished successfully".to_string()
+                if self.create_style {
+                    if *success {
+                        self.push_line(format!("Set kubectl context to \"kind-{}\"", self.name));
+                        self.push_line("You can now use your cluster with:".to_string());
+                        self.push_line(String::new());
+                        self.push_line(format!(
+                            "kubectl cluster-info --context kind-{}",
+                            self.name
+                        ));
+                    } else {
+                        self.push_line(" \u{2717} plan aborted".to_string());
+                    }
                 } else {
-                    "plan aborted".to_string()
-                });
+                    self.push_line(if *success {
+                        "plan finished successfully".to_string()
+                    } else {
+                        "plan aborted".to_string()
+                    });
+                }
             }
         }
     }
@@ -196,9 +263,9 @@ pub fn show(ctx: &egui::Context, panel: &mut OpPanel, actions: &mut Vec<CoreComm
                 ui.strong("Steps");
                 for step in &panel.steps {
                     let (marker, color) = match step.status {
-                        StepStatus::Running => ("...", theme::AMBER),
-                        StepStatus::Done => ("ok", theme::GREEN),
-                        StepStatus::Failed => ("FAILED", theme::RED),
+                        StepStatus::Running => ("\u{2026}", theme::AMBER),
+                        StepStatus::Done => ("\u{2713}", theme::GREEN),
+                        StepStatus::Failed => ("\u{2717}", theme::RED),
                     };
                     ui.horizontal(|ui| {
                         ui.label(
@@ -336,5 +403,111 @@ mod tests {
         assert_eq!(friendly_step("ingress-helm"), "Ingress: helm");
         assert_eq!(friendly_step("cilium-hubble"), "Cilium extras: hubble");
         assert_eq!(friendly_step("mystery-step"), "mystery-step");
+    }
+
+    #[test]
+    fn styled_create_prints_kind_like_progress() {
+        let mut panel = OpPanel::start(OpKind::Create, "demo", 1);
+        panel.apply_event(&ProvisionEvent::StepStarted {
+            id: "kind-create".to_string(),
+        });
+        panel.apply_event(&ProvisionEvent::StepOutput {
+            id: "cni-cilium-install".to_string(),
+            line: "some line".to_string(),
+        });
+        panel.apply_event(&ProvisionEvent::StepFinished {
+            id: "kind-create".to_string(),
+        });
+        panel.apply_event(&ProvisionEvent::StepStarted {
+            id: "cni-cilium-install".to_string(),
+        });
+        panel.apply_event(&ProvisionEvent::StepFailed {
+            id: "cni-cilium-install".to_string(),
+            error: "boom".to_string(),
+        });
+        panel.apply_event(&ProvisionEvent::PlanFinished { success: false });
+        let lines: Vec<&str> = panel.output.iter().map(String::as_str).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "Creating cluster \"demo\" ...",
+                " \u{2713} Create cluster",
+                "[CNI: cilium-install] some line",
+                " \u{2717} CNI: cilium-install",
+                "  boom",
+                " \u{2717} plan aborted",
+            ]
+        );
+    }
+
+    #[test]
+    fn styled_create_success_footer() {
+        let mut panel = OpPanel::start(OpKind::Create, "demo", 1);
+        panel.apply_event(&ProvisionEvent::PlanFinished { success: true });
+        let tail: Vec<String> = panel
+            .output
+            .iter()
+            .skip(panel.output.len().saturating_sub(4))
+            .cloned()
+            .collect();
+        assert_eq!(
+            tail,
+            vec![
+                "Set kubectl context to \"kind-demo\"",
+                "You can now use your cluster with:",
+                "",
+                "kubectl cluster-info --context kind-demo",
+            ]
+        );
+    }
+
+    #[test]
+    fn destroy_panel_keeps_legacy_format() {
+        let mut panel = OpPanel::start(OpKind::Destroy, "demo", 1);
+        panel.apply_event(&ProvisionEvent::StepStarted {
+            id: "merge-kubeconfig".to_string(),
+        });
+        panel.apply_event(&ProvisionEvent::StepFinished {
+            id: "merge-kubeconfig".to_string(),
+        });
+        let lines: Vec<&str> = panel.output.iter().map(String::as_str).collect();
+        assert_eq!(
+            lines,
+            vec!["[Merge kubeconfig] started", "[Merge kubeconfig] finished"]
+        );
+    }
+
+    #[test]
+    fn step_output_uses_friendly_prefix() {
+        let mut panel = OpPanel::start(OpKind::Create, "demo", 1);
+        panel.apply_event(&ProvisionEvent::StepOutput {
+            id: "cni-flannel-install".to_string(),
+            line: "x".to_string(),
+        });
+        let lines: Vec<&str> = panel.output.iter().map(String::as_str).collect();
+        assert_eq!(lines, vec!["[CNI: flannel-install] x"]);
+    }
+
+    #[test]
+    fn styled_header_printed_only_once() {
+        let mut panel = OpPanel::start(OpKind::Recreate, "demo", 1);
+        panel.apply_event(&ProvisionEvent::StepStarted {
+            id: "kind-create".to_string(),
+        });
+        panel.apply_event(&ProvisionEvent::StepStarted {
+            id: "cni-cilium-install".to_string(),
+        });
+        assert_eq!(
+            panel
+                .output
+                .iter()
+                .filter(|l| l.starts_with("Recreating"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            panel.output.front().map(String::as_str),
+            Some("Recreating cluster \"demo\" ...")
+        );
     }
 }
