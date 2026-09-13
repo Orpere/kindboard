@@ -3,6 +3,8 @@
 > Local Kubernetes-in-Docker clusters — with a real CNI, ingress, and observability —
 > managed from a desktop app instead of a pile of shell scripts.
 
+**Website:** <https://orpere.github.io/kindboard/> · **Repo:** <https://github.com/Orpere/kindboard>
+
 **kindboard** is an open-source desktop dashboard for creating and managing
 [kind](https://kind.sigs.k8s.io) (Kubernetes-in-Docker) clusters on Linux and
 macOS, built in Rust. It speaks to the same official tools you already trust —

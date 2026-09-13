@@ -2,6 +2,10 @@
 
 Static, self-contained presentation site for kindboard.
 
+**Live:** <https://orpere.github.io/kindboard/> — published from this folder
+by the GitHub Pages workflow (`.github/workflows/pages.yml`); every push that
+touches `web/**` redeploys automatically.
+
 ## Deploy anywhere
 
 - **Every asset reference is relative** — no leading slashes, no domain
