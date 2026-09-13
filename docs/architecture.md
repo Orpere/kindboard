@@ -34,7 +34,7 @@ graph LR
     Kubectl[kubectl]
     Helm[helm]
     CiliumCLI[cilium CLI]
-    K8s[Kubernetes API (in-cluster)]
+    K8s["Kubernetes API (in-cluster)"]
     Kubeconfig[~/.kube/config]
     Disk[~/.local/share/kindboard/]
   end
@@ -56,7 +56,7 @@ graph LR
   Logs -->|"ring buffer files"| Disk
   State -->|"settings.json"| Disk
 
-  Core -->|Event enum (state diffs, logs, progress)| CmdBus
+  Core -->|"Event enum (state diffs, logs, progress)"| CmdBus
   CmdBus -->|repaint + render| ClusterTab
   CmdBus -->|repaint + render| LogView
   CmdBus -->|repaint + render| DepPanel
@@ -211,7 +211,7 @@ Writes are **atomic everywhere**: serialize to `tmp/`, `fsync`, rename over targ
 | k8s API unavailable mid-watch | kube-rs `watcher` error | backoff re-watch (bounded), show stale-data banner, keep last-good graph |
 | Log stream runaway | ring buffer cap + backpressure | evict oldest; cancel on tab close (ADR-0012) |
 
-## Verification log (2026-09-12)
+## 7. Verification log (2026-09-12)
 
 - `kind --help` surface: `build/create/delete/export/get/load/version` only — no node add/remove (confirms ADR-0002).
 - kind v1alpha4 field names from `pkg/apis/config/v1alpha4/types.go` (main).
@@ -225,7 +225,7 @@ Writes are **atomic everywhere**: serialize to `tmp/`, `fsync`, rename over targ
 - kube-rs 4.2.0 `Kubeconfig` methods (`read_from/from_yaml/read/from_env/merge`, `Serialize/Deserialize` with flatten `other`) from `kube-client/src/config/file_config.rs`.
 - Fedora 44 `dnf repoquery` for package availability (see dependency-install-matrix).
 
-## Live e2e verification (2026-09-13)
+## 8. Live e2e verification (2026-09-13)
 
 - CNI matrix `e2e_cni_matrix_flannel_calico_cilium` ran live against real
   kind: **flannel ✓** and **calico ✓** provisioned end to end (kind create →
