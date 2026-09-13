@@ -1,13 +1,13 @@
 # How to create clusters with flannel, calico or cilium
 
-kindboard can provision a kind cluster with one of four CNIs — kindnet
-(the kind default), **flannel**, **calico** or **cilium** — selected in the
-create wizard. This guide walks through the three non-default CNIs, which
-kindboard installs for you automatically.
+Kind clusters are born with kindnet — kind's built-in, minimal CNI. If you
+want the networking features the ecosystem actually runs on (NetworkPolicy,
+encryption, eBPF service handling), you swap in a real CNI: this guide shows
+all three, which kindboard installs for you automatically.
 
 **Prerequisites:** Docker running, kind + kubectl installed (kindboard can
 install those from the Dependencies panel — see
-[install-kubectx.md](install-kubectx.md)).
+[install-kubectx.md](install-kubectx.md)). Time: ~5 minutes per cluster.
 
 ---
 
@@ -29,14 +29,17 @@ The **Cilium extras** section appears only for cilium:
 
 ## 2. What kindboard does per CNI
 
+Each CNI install follows the same shape — download a pinned manifest, apply
+it, verify nodes become Ready — with CNI-specific details:
+
 | CNI | Provisioning steps |
 |---|---|
 | **flannel** | Downloads `kube-flannel.yml` (release v0.28.9, SHA-256 pinned) → `kubectl apply` → waits for nodes Ready. The pod CIDR is patched into `net-conf.json.Network` when it differs from flannel's default `10.244.0.0/16`. |
-| **calico** | Downloads the tigera operator manifest (v3.32.0, pinned) → `kubectl apply` → **waits for the operator's CRDs to become established** → applies the `Installation` custom resource (with your pod CIDR) → waits for nodes Ready. |
-| **cilium** | Runs `cilium install --set kubeProxyReplacement=false` (via the official cilium CLI; Cilium 1.20+ accepts only `true`/`false`) → verifies with `cilium status --wait` → then applies the enabled extras: Gateway API CRDs + `gatewayAPI.enabled=true`, Hubble relay + UI, `ingressController.enabled=true` (on by default) and clustermesh. |
+| **calico** | Downloads the tigera operator manifest (v3.32.0, pinned) → `kubectl apply` → **waits for the operator's CRDs to become established** (the operator registers them at runtime; applying too early fails with "no matches for kind Installation") → applies the `Installation` custom resource (with your pod CIDR) → waits for nodes Ready. |
+| **cilium** | Runs `cilium install --set kubeProxyReplacement=false` (via the official cilium CLI; Cilium 1.20+ accepts only `true`/`false` — the old `disabled` keyword is rejected) → verifies with `cilium status --wait` → then applies the enabled extras: Gateway API CRDs + `gatewayAPI.enabled=true`, Hubble relay + UI, `ingressController.enabled=true` (on by default) and clustermesh. |
 
 Everything downloads over HTTPS with a pinned SHA-256; a digest mismatch
-aborts the step.
+aborts the step before anything is executed.
 
 ## 3. Result — live clusters, live details
 
@@ -95,10 +98,10 @@ helper=FnSetRetval
 
 Kernel 7.x changed the `bpf_set_retval` BPF helper signature; cilium
 1.20.1 and 1.21.0-pre.0 (current at the time of writing) still probe the
-old form and refuse to start. This is upstream (cilium ↔ kernel), not
-kindboard — kindboard's provisioning itself is verified up to this point
-(kind-create ✓, `kubeProxyReplacement=false` accepted ✓, the agent is the
-first thing that fails). Options:
+old form and refuse to start. This is an **upstream cilium ↔ kernel**
+incompatibility, not a kindboard bug — kindboard's provisioning itself is
+verified up to this point (kind-create ✓, `kubeProxyReplacement=false`
+accepted ✓; the agent is the first thing that fails). If you hit it:
 
 - boot an older kernel from the boot menu if one is installed (e.g.
   `6.19.10-300.fc44`), or

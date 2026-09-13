@@ -1,6 +1,16 @@
 # kindboard — Dependency Install Matrix
 
-> Exact detection commands, package names, and fallback binary URLs. Verified 2026-09-12 against the host (Fedora 44), Homebrew API, and each project's release pages. `~/.local/bin` is prepended to `PATH` for binary fallbacks; installs are idempotent (skip if `detect` already succeeds).
+> The exact detection commands, package names, and fallback binary URLs
+> kindboard uses for its eight managed tools.
+>
+> Verified 2026-09-12 against the host (Fedora 44), the Homebrew API, and each
+> project's own release pages. `~/.local/bin` is prepended to `PATH` for binary
+> fallbacks; every install is idempotent (skip if detection already succeeds).
+>
+> **How to read this document:** the summary table is the quick answer for any
+> tool; the per-tool sections carry the details that bite — version schemes
+> that differ from the tool's name (look at cilium, k9s, and kubectx), missing
+> packages in default repos, and binary layout inside archives.
 
 ## Integrity verification (enforced since security audit 2026-09-12)
 

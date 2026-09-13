@@ -1,7 +1,14 @@
 # kindboard — Type-Level Contracts
 
-> Rust-like signatures only (no implementation code). All flag names/URLs verified 2026-09-12.
-> These are the seams between modules; changing a type here is a breaking change until 1.0.
+> Rust-like signatures only (no implementation code). All flag names/URLs
+> verified 2026-09-12; provisioning flows exercised live 2026-09-13 (see
+> `architecture.md` §9).
+>
+> **How to read this document:** these are the *seams* — the public types and
+> command surfaces that modules agree on. Changing a type here is a breaking
+> change until 1.0, so this file is the arbiter whenever two modules disagree.
+> Where a type is obvious, the comment explains the *why* (kind quirks,
+> compatibility constraints), not just the *what*.
 
 ## 1. Cluster specification
 
@@ -283,7 +290,7 @@ pub enum NodeRole { ControlPlane, Worker }
 - **Idempotency:** `kind create` fails if the cluster exists (`Error::ClusterExists`) — the app pre-checks `kind get clusters`. `helm install` is `helm upgrade --install` for idempotent re-runs. `cilium install` is idempotent (helm under the hood).
 - **Atomic writes** everywhere (spec JSON, settings, kubeconfig) per ADR-0007; kubeconfig via `kube::config::Kubeconfig` (serde round-trip), never raw text munging.
 
-## 6. Corrections to the brief (verified against current cilium-cli)
+## 7. Corrections to the brief (verified against current cilium-cli)
 
 Two product-brief assumptions do **not** match the current cilium-cli (main, cilium 1.20.1 era). Flagging for client sign-off:
 

@@ -1,6 +1,14 @@
 # kindboard
 
-A fully open-source desktop dashboard to run and manage [kind](https://kind.sigs.k8s.io) (Kubernetes-in-Docker) clusters on Linux and macOS — built in Rust as a local development environment for testing your apps.
+> Local Kubernetes-in-Docker clusters — with a real CNI, ingress, and observability —
+> managed from a desktop app instead of a pile of shell scripts.
+
+**kindboard** is an open-source desktop dashboard for creating and managing
+[kind](https://kind.sigs.k8s.io) (Kubernetes-in-Docker) clusters on Linux and
+macOS, built in Rust. It speaks to the same official tools you already trust —
+kind, docker, kubectl, helm, and the Cilium CLI — and automates the parts kind
+leaves to you: **flannel, calico or Cilium** networking, **nginx, traefik or
+Cilium** ingress, Hubble observability, the Gateway API, and cluster mesh.
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 ![Rust](https://img.shields.io/badge/rust-1.98+-orange)
@@ -10,65 +18,115 @@ A fully open-source desktop dashboard to run and manage [kind](https://kind.sigs
 
 ---
 
-## Features
+## Why kindboard?
 
-- **Multiple clusters, different settings** — name, Kubernetes version, CNI (kindnet default, flannel, calico, cilium), pod/service CIDR, feature gates, extra port mappings, worker count.
-- **Cilium extras** — checkboxes for API Gateway, Hubble, Ingress Controller and Mesh (clustermesh); enabling Mesh opens a per-cluster ID form (cluster-id + cluster-name).
-- **Ingress controller choice** — nginx, traefik or cilium, with automatic host-port mapping (80/443).
-- **Dependency manager** — detects and installs docker, kind, kubectl, helm, cilium CLI, k9s, kubectx and kustomize (brew / dnf / apt / pacman first, official binaries with SHA-256 verification as fallback), including the docker daemon state.
-- **Kubeconfig lifecycle** — every cluster is added as a context to your default kubeconfig on create and removed on destroy (verified and repaired even for clusters created outside the app).
-- **Per-cluster tabs with a live topology diagram** — namespaces, workloads, pods, services and ingresses as a layered graph with status colors, pan/zoom, click-to-inspect and opt-in auto-refresh.
-- **Log watching** — node containers via `docker logs -f` and workload pods via `kubectl logs -f`, in bounded, follow-mode ring buffers.
-- **Full cluster management** — scale workers up/down from the cluster card, delete individual worker nodes (click a node → guided, secure recreate — kind has no node-level commands), destroy with a type-the-name confirmation popup, and export logs/kubeconfig. Cluster creation output mirrors `kind create` (`✓`/`✗` steps + `kubectl cluster-info --context kind-<name>` footer) so a failed step reads exactly like the official tool text.
-- **k9s integration** — an "Open in k9s" button on every cluster card and tab launches k9s for that cluster in a new terminal.
-- **Official tool logos** — deps panel and buttons use the official project logos (kubectl uses the Kubernetes logo); tools without one (kubectx) get a monogram.
+`kind create cluster` gives you a working Kubernetes in minutes — and then
+stops. Beyond the default kindnet CNI, nothing is wired for you:
 
-> **Scaling note:** kind fixes the node topology at creation time. kindboard implements
-> "scale workers" / "delete node" as a one-click guided recreate that preserves all
-> cluster settings, with an explicit workload-loss warning.
+- kind ships no **CNI** beyond kindnet (flannel, calico and Cilium need their
+  own install + pod-CIDR wiring, and Cilium 1.20+ is picky about its values).
+- It ships no **ingress controller** (nginx/traefik/Cilium all need manifests,
+  helm repos, or `--set` flags you have to look up).
+- It gives you **no observability** — no topology view, no log tailing, no
+  Hubble — and, by design, **no way to scale or shrink a cluster** (kind has no
+  node-level commands).
 
-## Requirements
+kindboard wraps the full lifecycle in one GUI and one plan engine: it boots
+clusters, installs the CNI and ingress you picked, opens a live topology tab,
+tails logs, exports kubeconfigs, and manages missing dependency tools — always
+running the official binaries underneath, printing their output in kind's own
+style, and persisting everything crash-safely.
 
-- **Docker** (running) — the only hard requirement; kindboard itself can install kind, kubectl, helm, cilium CLI, k9s, kubectx and kustomize from the Dependencies panel.
-- Linux (Fedora / Ubuntu / Arch) or macOS.
-- A graphical session (X11 or Wayland).
+## What kindboard does
+
+- **Multiple clusters, each with its own settings** — name, Kubernetes
+  version, CNI (kindnet default, flannel, calico, cilium), pod/service CIDR,
+  feature gates, extra port mappings, worker count.
+- **Cilium extras as checkboxes** — Gateway API, Hubble (relay + UI), Ingress
+  Controller and Mesh (clustermesh); enabling Mesh opens a per-cluster ID form
+  (cluster-id + cluster-name).
+- **Ingress controller of your choice** — nginx, traefik or cilium, with
+  automatic host-port mapping (80/443).
+- **A dependency manager built in** — detects and installs docker, kind,
+  kubectl, helm, the Cilium CLI, k9s, kubectx and kustomize: package manager
+  first (brew/dnf/apt/pacman), official binaries with **SHA-256 verification**
+  as fallback — including the docker daemon state.
+- **Kubeconfig lifecycle handled safely** — every cluster is added as a
+  context on create and removed on destroy, verified and repaired even for
+  clusters created outside the app (atomic writes, `.bak` on the previous
+  file).
+- **Per-cluster tabs with a live topology diagram** — namespaces, workloads,
+  pods, services and ingresses as a layered graph with status colors,
+  pan/zoom, click-to-inspect and opt-in auto-refresh.
+- **Log watching** — node containers via `docker logs -f` and workload pods
+  via `kubectl logs -f`, in bounded, follow-mode ring buffers (2,000 lines /
+  256 KiB per source — a runaway stream can never grow memory without limit).
+- **Full cluster management** — scale workers up and down, delete individual
+  worker nodes, destroy with a type-the-name confirmation, and export
+  logs/kubeconfig. Cluster creation output mirrors `kind create cluster`
+  (`✓`/`✗` steps + `kubectl cluster-info --context kind-<name>` footer), so a
+  failed step reads exactly like the official tool text.
+- **k9s integration** — an **Open in k9s** button on every cluster card and
+  tab launches k9s for that cluster in a new terminal.
+- **Official tool logos** — the dependencies panel and buttons use the official
+  project logos (kubectl uses the Kubernetes logo); tools without one
+  (kubectx) get a monogram.
+
+> **Scaling note:** kind fixes the node topology at creation time. kindboard
+> implements "scale workers" / "delete node" as a one-click *guided recreate*
+> that preserves all cluster settings, with an explicit workload-loss warning —
+> the only safe way to resize a kind cluster (ADR-0002, verified against kind
+> upstream).
 
 ## Quick start
 
-**Prebuilt binary** — download `kindboard-<os>-<arch>.tar.gz` from the [Releases](https://github.com/Orpere/kindboard/releases) page (or run `scripts/build.sh` to produce `dist/` yourself), extract, run `./kindboard`.
+**Prebuilt binary** — download `kindboard-<os>-<arch>.tar.gz` from the
+[Releases](https://github.com/Orpere/kindboard/releases) page (or run
+`scripts/build.sh` to produce `dist/` yourself), extract, run `./kindboard`.
 
 **From source** (Rust 1.98+):
 
 ```bash
 make run        # run the app in debug mode
 make build      # full gates + release artifacts in dist/ + SHA256SUMS
-make build-all  # also try linux aarch64 and darwin targets (skips unbuildable ones)
 ```
+
+**Your first cluster takes three clicks:**
+
+1. Open the **Overview** tab → **Create cluster**.
+2. Name it, pick a Kubernetes version, and choose a CNI — flannel, calico,
+   or cilium (with its extras):
+
+   ![Create wizard — CNI selector](docs/howtos/screenshots/05-wizard-cni.png)
+
+3. Hit **Create**. kindboard watches each provision step as it runs — kind
+   create, kubeconfig merge, CNI install, readiness check — all in kind's own
+   `✓`/`✗` style.
+
+See [docs/howtos/create-cni-clusters.md](docs/howtos/create-cni-clusters.md)
+for the full walkthrough, what each CNI install does under the hood, and known
+environment limitations.
 
 ## Command line
 
 `kindboard` is a desktop app; by default it runs in the foreground of the
-terminal that launched it. Everything else is opt-in:
+terminal that launched it, so you can watch the logs live. Everything else is
+opt-in:
 
 | Flag | Effect |
 |---|---|
 | `--help`, `--version` | Usage / version (exits immediately) |
 | `--detach` | Launch the GUI in the **background** (new session, stdio to `/dev/null`); the terminal prints the PID + log path and returns. Logs keep flowing to `<data_dir>/kindboard/kindboard.log` |
-| `-v`, `--verbose` | Raise the log level — repeatable: `-v` → debug, `-vv` → trace. The simplest troubleshooting combo is `kindboard --detach -v --log-file ~/kindboard.log` |
-| `--log-file <path>` | Also write log records (with timestamps) to `<path>`; in `--detach` mode defaults to `<data_dir>/kindboard/kindboard.log` |
+| `-v`, `--verbose` | Raise the log level — repeatable: `-v` → debug, `-vv` → trace. The quickest troubleshooting combo: `kindboard --detach -v --log-file ~/kindboard.log` |
+| `--log-file <path>` | Also write timestamped log records to `<path>`; in `--detach` mode this defaults to `<data_dir>/kindboard/kindboard.log` |
 | `--screenshot <file.png>` | Capture one screenshot then exit (CI / headless, e.g. on Xvfb) |
 | `--screenshot-every <secs> [--screenshot-dir <dir>]` | Capture periodically into a directory, then exit |
 
-Run the app from a terminal without any flag to troubleshoot interactively:
-all `warn`+ records are printed to stderr; add `-v`/`-vv` for the full
-subprocess and provisioning trace (exec args, provision steps, dependency
-installs, topology watch errors). Detached runs always write to a log file,
-so `tail -f ~/.local/share/kindboard/kindboard.log` after `--detach`.
-
-> **Cluster creation output** mirrors `kind create cluster`: steps print as
-> `Creating cluster "test" ...` with ` ✓` per completed step and ` ✗` + the
-> error on failure, ending with `Set kubectl context to "kind-test"` /
-> `kubectl cluster-info --context kind-test`.
+**Troubleshooting recipe:** run the app from a terminal without flags to see
+all `warn`+ records on stderr; add `-v`/`-vv` for the full subprocess and
+provisioning trace (exec args, provision steps, dependency installs, topology
+watch errors). Detached runs always write to a log file, so
+`tail -f ~/.local/share/kindboard/kindboard.log` works right after `--detach`.
 
 ## Make targets
 
@@ -85,19 +143,20 @@ so `tail -f ~/.local/share/kindboard/kindboard.log` after `--detach`.
 | `make clean` | Remove build artifacts and `dist/` |
 | `make help` | List all targets |
 
-Scripts: `scripts/build.sh` (release pipeline, reproducible tarballs) · `scripts/prepare-assets.sh` (logo pipeline). No GitHub Actions — builds are local by design.
+Scripts: `scripts/build.sh` (reproducible release pipeline) ·
+`scripts/prepare-assets.sh` (logo pipeline). No GitHub Actions — builds are
+local by design.
 
-## Documentation
+## How kindboard works
 
-| Doc | Contents |
-|---|---|
-| [docs/architecture.md](docs/architecture.md) | System graph, crate layout, async model, failure modes |
-| [docs/contracts.md](docs/contracts.md) | Type-level contracts: spec, commands, provisioning, topology |
-| [docs/dependency-install-matrix.md](docs/dependency-install-matrix.md) | Detection, package names, pinned binary downloads per tool |
-| [docs/howtos/install-kubectx.md](docs/howtos/install-kubectx.md) | **How-to with screenshots:** install kubectx from the Dependencies panel |
-| [docs/howtos/create-cni-clusters.md](docs/howtos/create-cni-clusters.md) | **How-to with screenshots:** flannel, calico and cilium clusters, end to end |
-| [docs/adrs/](docs/adrs/) | Architecture decision records (ADR-0008 … 0013) |
-| [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md) | Logo ownership, sources and trademark notes |
+kindboard is two Rust crates with one hard seam (ADR-0008):
+
+- **`kindboard-core`** — a UI-free library (`#![forbid(unsafe_code)]`) that
+  owns everything risky: subprocess spawning, the tokio runtime, kube-rs, and
+  all disk/kubeconfig writes. It exposes only typed `Command`s and `Event`s.
+- **`kindboard-app`** — the eframe/egui desktop binary, which enqueues
+  `Command`s and renders `Event`s. The UI can't crash your cluster, and the
+  orchestration is fully testable headlessly.
 
 ```mermaid
 graph LR
@@ -110,12 +169,29 @@ graph LR
   CORE -->|CoreEvent| UI
 ```
 
+Deep dives: [docs/architecture.md](docs/architecture.md) (design, async model,
+failure modes) and [docs/contracts.md](docs/contracts.md) (the typed seams
+between every module).
+
 **Components** (official logos, see [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md)):
 
 | Core tooling | CNIs & ingress | Utilities |
 |---|---|---|
 | ![kind](assets/logos/kind-64.png) kind · ![docker](assets/logos/docker-64.png) docker · ![kubectl](assets/logos/kubectl-64.png) kubectl · ![helm](assets/logos/helm-64.png) helm · ![cilium](assets/logos/cilium-64.png) cilium CLI | ![flannel](assets/logos/flannel-64.png) flannel · ![calico](assets/logos/calico-64.png) calico · ![cilium](assets/logos/cilium-64.png) cilium · ![ingress-nginx](assets/logos/ingress-nginx-64.png) nginx ingress · ![traefik](assets/logos/traefik-64.png) traefik | ![k9s](assets/logos/k9s-64.png) k9s · ![kubectx](assets/logos/kubectx-64.png) kubectx · ![kustomize](assets/logos/kustomize-64.png) kustomize |
 
+## Documentation
+
+| Doc | Contents |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | Why the app is shaped this way: design goals, system graph, async model, failure modes, verification logs |
+| [docs/contracts.md](docs/contracts.md) | The typed contracts between modules: spec, commands, provisioning order, topology |
+| [docs/dependency-install-matrix.md](docs/dependency-install-matrix.md) | Detection commands, package names, pinned binary downloads per tool |
+| [docs/howtos/install-kubectx.md](docs/howtos/install-kubectx.md) | **How-to with screenshots:** install kubectx from the Dependencies panel |
+| [docs/howtos/create-cni-clusters.md](docs/howtos/create-cni-clusters.md) | **How-to with screenshots:** flannel, calico and cilium clusters, end to end |
+| [docs/adrs/](docs/adrs/) | Architecture decision records (ADR-0008 … 0013) |
+| [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md) | Logo ownership, sources and trademark notes |
+
 ## License & attribution
 
-[MIT](LICENSE) © 2026 Orlando Rosa Pereira. Project logos belong to their respective owners — see [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md).
+[MIT](LICENSE) © 2026 Orlando Rosa Pereira. Project logos belong to their
+respective owners — see [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md).
