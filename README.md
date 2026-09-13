@@ -19,7 +19,7 @@ A fully open-source desktop dashboard to run and manage [kind](https://kind.sigs
 - **Kubeconfig lifecycle** — every cluster is added as a context to your default kubeconfig on create and removed on destroy (verified and repaired even for clusters created outside the app).
 - **Per-cluster tabs with a live topology diagram** — namespaces, workloads, pods, services and ingresses as a layered graph with status colors, pan/zoom, click-to-inspect and opt-in auto-refresh.
 - **Log watching** — node containers via `docker logs -f` and workload pods via `kubectl logs -f`, in bounded, follow-mode ring buffers.
-- **Full cluster management** — scale workers up/down from the cluster card, delete individual worker nodes (click a node → guided, secure recreate — kind has no node-level commands), destroy with a type-the-name confirmation popup, and export logs/kubeconfig.
+- **Full cluster management** — scale workers up/down from the cluster card, delete individual worker nodes (click a node → guided, secure recreate — kind has no node-level commands), destroy with a type-the-name confirmation popup, and export logs/kubeconfig. Cluster creation output mirrors `kind create` (`✓`/`✗` steps + `kubectl cluster-info --context kind-<name>` footer) so a failed step reads exactly like the official tool text.
 - **k9s integration** — an "Open in k9s" button on every cluster card and tab launches k9s for that cluster in a new terminal.
 - **Official tool logos** — deps panel and buttons use the official project logos (kubectl uses the Kubernetes logo); tools without one (kubectx) get a monogram.
 
@@ -44,6 +44,31 @@ make run        # run the app in debug mode
 make build      # full gates + release artifacts in dist/ + SHA256SUMS
 make build-all  # also try linux aarch64 and darwin targets (skips unbuildable ones)
 ```
+
+## Command line
+
+`kindboard` is a desktop app; by default it runs in the foreground of the
+terminal that launched it. Everything else is opt-in:
+
+| Flag | Effect |
+|---|---|
+| `--help`, `--version` | Usage / version (exits immediately) |
+| `--detach` | Launch the GUI in the **background** (new session, stdio to `/dev/null`); the terminal prints the PID + log path and returns. Logs keep flowing to `<data_dir>/kindboard/kindboard.log` |
+| `-v`, `--verbose` | Raise the log level — repeatable: `-v` → debug, `-vv` → trace. The simplest troubleshooting combo is `kindboard --detach -v --log-file ~/kindboard.log` |
+| `--log-file <path>` | Also write log records (with timestamps) to `<path>`; in `--detach` mode defaults to `<data_dir>/kindboard/kindboard.log` |
+| `--screenshot <file.png>` | Capture one screenshot then exit (CI / headless, e.g. on Xvfb) |
+| `--screenshot-every <secs> [--screenshot-dir <dir>]` | Capture periodically into a directory, then exit |
+
+Run the app from a terminal without any flag to troubleshoot interactively:
+all `warn`+ records are printed to stderr; add `-v`/`-vv` for the full
+subprocess and provisioning trace (exec args, provision steps, dependency
+installs, topology watch errors). Detached runs always write to a log file,
+so `tail -f ~/.local/share/kindboard/kindboard.log` after `--detach`.
+
+> **Cluster creation output** mirrors `kind create cluster`: steps print as
+> `Creating cluster "test" ...` with ` ✓` per completed step and ` ✗` + the
+> error on failure, ending with `Set kubectl context to "kind-test"` /
+> `kubectl cluster-info --context kind-test`.
 
 ## Make targets
 
@@ -71,7 +96,7 @@ Scripts: `scripts/build.sh` (release pipeline, reproducible tarballs) · `script
 | [docs/dependency-install-matrix.md](docs/dependency-install-matrix.md) | Detection, package names, pinned binary downloads per tool |
 | [docs/howtos/install-kubectx.md](docs/howtos/install-kubectx.md) | **How-to with screenshots:** install kubectx from the Dependencies panel |
 | [docs/howtos/create-cni-clusters.md](docs/howtos/create-cni-clusters.md) | **How-to with screenshots:** flannel, calico and cilium clusters, end to end |
-| [docs/adrs/](docs/adrs/) | Architecture decision records (ADR-0008 … 0012) |
+| [docs/adrs/](docs/adrs/) | Architecture decision records (ADR-0008 … 0013) |
 | [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md) | Logo ownership, sources and trademark notes |
 
 ```mermaid
@@ -84,6 +109,12 @@ graph LR
   KIND -->|create/delete/logs| CL[kind clusters]
   CORE -->|CoreEvent| UI
 ```
+
+**Components** (official logos, see [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md)):
+
+| Core tooling | CNIs & ingress | Utilities |
+|---|---|---|
+| ![kind](assets/logos/kind-64.png) kind · ![docker](assets/logos/docker-64.png) docker · ![kubectl](assets/logos/kubectl-64.png) kubectl · ![helm](assets/logos/helm-64.png) helm · ![cilium](assets/logos/cilium-64.png) cilium CLI | ![flannel](assets/logos/flannel-64.png) flannel · ![calico](assets/logos/calico-64.png) calico · ![cilium](assets/logos/cilium-64.png) cilium · ![ingress-nginx](assets/logos/ingress-nginx-64.png) nginx ingress · ![traefik](assets/logos/traefik-64.png) traefik | ![k9s](assets/logos/k9s-64.png) k9s · ![kubectx](assets/logos/kubectx-64.png) kubectx · ![kustomize](assets/logos/kustomize-64.png) kustomize |
 
 ## License & attribution
 

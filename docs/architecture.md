@@ -240,6 +240,16 @@ Writes are **atomic everywhere**: serialize to `tmp/`, `fsync`, rename over targ
     install-class commands (helm/cilium) 600 s.
   - cilium: `kubeProxyReplacement` must be `false` for Cilium 1.20+ (the
     `disabled` keyword is rejected).
+    **Regression note (v0.1.0 → v0.1.1):** the initial release binary shipped
+    `--set kubeProxyReplacement=disabled`, which Cilium 1.20's chart rejects
+    with *"kubeProxyReplacement must be explicitly set to a valid value (true
+    or false)"* — reproduced live on 2026-09-13 (`cilium install` fails at the
+    configmap render before any agent starts). The fix changed the constant to
+    `kubeProxyReplacement=false` (commit 48fd524) and the release tarball was
+    rebuilt as v0.1.1; re-download or rebuild from `main` if `--version`
+    prints 0.1.0. Verified live: `cilium install --context kind-<name> --set
+    kubeProxyReplacement=false` renders the configmap (`kube-proxy-replacement:
+    false`), deploys the release and starts the operator.
 - **cilium agent cannot start on this host's kernel 7.2.4**: its startup BPF
   probe fails with `call bpf_set_retval#187: R1 is not a scalar` (kernel 7.x
   changed the helper signature; reproducible on cilium 1.20.1 and
