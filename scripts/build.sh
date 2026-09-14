@@ -25,12 +25,19 @@
 #   - darwin targets on Linux are built via osxcross when it is detected
 #     (OSXCROSS_DIR below); otherwise they are SKIPPED with guidance, or the
 #     build FAILS when KINDBOARD_REQUIRE_DARWIN=1
+#   - darwin targets require rcodesign (cargo install apple-codesign --locked)
+#     on the build host — missing rcodesign FAILS any darwin target that is
+#     built, it is not skippable (targets skipped for lack of osxcross never
+#     reach the signing step)
 #   - darwin targets on macOS are built natively (no osxcross needed)
 #
 # Artifacts land in dist/ (gitignored):
 #   dist/<target>/kindboard          raw binary
 #   dist/kindboard-<os>-<arch>.tar.gz  tarball containing just the binary
 #   dist/SHA256SUMS                  sha256 of every tarball
+# darwin binaries are ad-hoc signed with rcodesign (pure Rust) before
+# tarballing; the signature is then verified (codesign --verify on macOS,
+# structural LC_CODE_SIGNATURE + CSMAGIC check on Linux) — see ADR-0018
 #
 # Exit status: 0 if the host target built successfully, or when the host was
 # not requested and every requested target built or was gracefully skipped.
@@ -51,6 +58,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 AUDIT_BIN="${CARGO_AUDIT:-$HOME/.cargo/bin/cargo-audit}"
+RCODESIGN_BIN="${KINDBOARD_RCODESIGN:-$(command -v rcodesign || true)}"
 
 # ---------------------------------------------------------------------------
 # Darwin cross-build via osxcross (docs/adrs/ADR-0017.md)
@@ -63,6 +71,8 @@ AUDIT_BIN="${CARGO_AUDIT:-$HOME/.cargo/bin/cargo-audit}"
 #   sudo dnf install clang cmake lld llvm libstdc++-devel libstdc++-static \
 #     zlib-devel openssl-devel libxml2-devel
 #   rustup target add aarch64-apple-darwin x86_64-apple-darwin
+#   rcodesign is additionally required for darwin builds:
+#     cargo install apple-codesign --locked
 # Toolchain (one-time, outside the repo):
 #   git clone https://github.com/tpoechtrager/osxcross ~/.local/src/osxcross
 #   curl --proto '=https' -fL "$MACOSX_SDK_URL" -o ~/.local/src/osxcross/tarballs/MacOSX26.1.sdk.tar.xz
@@ -126,6 +136,40 @@ osxcross_ready() {
     [[ -n "$(osxcross_wrapper x86_64 -clang)" ]] \
         && [[ -n "$(osxcross_wrapper aarch64 -clang)" ]]
 }
+
+# verify_darwin_signature <binary>: confirm the Mach-O carries an embedded
+# code signature. On macOS uses the canonical codesign verifier. On Linux
+# performs a structural check (rcodesign's own `verify` is unreliable for
+# ad-hoc signatures — it requires CMS data ad-hoc signatures don't have):
+#   LC_CODE_SIGNATURE load command present + CSMAGIC_EMBEDDED magic at dataoff.
+verify_darwin_signature() {
+    local bin=$1 stanza off magic
+    if [[ "$HOST_OS" == "Darwin" ]]; then
+        codesign --verify --strict "$bin"
+        return $?
+    fi
+    if ! command -v llvm-objdump >/dev/null; then
+        echo "llvm-objdump required to verify darwin signatures (dnf install llvm)" >&2
+        return 1
+    fi
+    stanza="$(llvm-objdump --macho --private-headers "$bin" 2>/dev/null \
+        | grep -A3 'LC_CODE_SIGNATURE')" || {
+        echo "no LC_CODE_SIGNATURE load command in $bin" >&2
+        return 1
+    }
+    off="$(awk '/dataoff/{print $2}' <<<"$stanza")"
+    if [[ ! "$off" =~ ^[0-9]+$ ]]; then
+        echo "could not parse LC_CODE_SIGNATURE dataoff in $bin" >&2
+        return 1
+    fi
+    magic="$(od -A n -t x1 -j "$off" -N 4 "$bin" | tr -d ' \n')"
+    if [[ "$magic" != "fade0cc0" ]]; then
+        echo "signature blob magic mismatch at dataoff $off: $magic (expected fade0cc0)" >&2
+        return 1
+    fi
+    return 0
+}
+
 
 # ensure_macosx_sdk: cache the digest-verified SDK tarball next to the
 # toolchain (build-time convenience only; the built toolchain already embeds
@@ -355,6 +399,39 @@ for target in "${TARGETS[@]}"; do
     if (( BUILD_RC == 0 )); then
         mkdir -p "$DIST_DIR/$target"
         cp "target/$target/release/kindboard" "$DIST_DIR/$target/kindboard"
+        if [[ "$os" == "darwin" ]]; then
+            # Never ship unsigned darwin assets — explicit failure over a
+            # silently broken artifact. Unsigned + quarantine makes Gatekeeper
+            # show "damaged" (hard error); an ad-hoc signature downgrades it
+            # to "unidentified developer" (bypassable via right-click Open).
+            # Sign the dist/ copy, not target/, to keep cargo output pristine.
+            # Applies to both osxcross cross builds and native macOS builds
+            # (same loop path).
+            if [[ -z "$RCODESIGN_BIN" ]]; then
+                RESULTS["$target"]="FAILED: rcodesign not found on PATH — darwin binaries must be ad-hoc signed (cargo install apple-codesign --locked)"
+                BUILD_FAILURES=$((BUILD_FAILURES+1))
+                rm -f "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz"
+                continue
+            fi
+            if [[ ! -x "$RCODESIGN_BIN" ]]; then
+                RESULTS["$target"]="FAILED: rcodesign not executable: $RCODESIGN_BIN — darwin binaries must be ad-hoc signed (cargo install apple-codesign --locked)"
+                BUILD_FAILURES=$((BUILD_FAILURES+1))
+                rm -f "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz"
+                continue
+            fi
+            RCODESIGN_ERR="$(mktemp)"
+            if "$RCODESIGN_BIN" sign "$DIST_DIR/$target/kindboard" 2>"$RCODESIGN_ERR" \
+                && verify_darwin_signature "$DIST_DIR/$target/kindboard" 2>>"$RCODESIGN_ERR"; then
+                rm -f "$RCODESIGN_ERR"
+                log "ad-hoc signed + verified: $DIST_DIR/$target/kindboard"
+            else
+                RESULTS["$target"]="FAILED: rcodesign sign/verify failed: $(tr '\012' ' ' < "$RCODESIGN_ERR")"
+                rm -f "$RCODESIGN_ERR"
+                rm -f "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz"
+                BUILD_FAILURES=$((BUILD_FAILURES+1))
+                continue
+            fi
+        fi
         rm -f "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz"
         GZIP=-n tar --owner=0 --group=0 --numeric-owner --mtime='@0' \
             -C "$DIST_DIR/$target" -czf "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz" kindboard
