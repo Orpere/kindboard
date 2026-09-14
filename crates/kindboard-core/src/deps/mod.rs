@@ -173,6 +173,14 @@ pub struct InstallRecipe {
     pub apt: Option<&'static str>,
     /// pacman package (Arch).
     pub pacman: Option<&'static str>,
+    /// winget package id (Windows; `winget install --id <id> ...`).
+    pub winget: Option<&'static str>,
+    /// Chocolatey package (Windows; `choco install -y <pkg>`).
+    pub choco: Option<&'static str>,
+    /// True when the tool cannot run on Windows at all (e.g. kubectx is a
+    /// POSIX shell script) — every Windows plan fails with an honest error
+    /// before any package manager or binary fallback is attempted.
+    pub windows_unsupported: bool,
     /// Binary download fallback into `~/.local/bin`.
     pub binary: Option<BinaryDownload>,
     /// True when only a package manager can install this (docker).
@@ -184,18 +192,27 @@ pub struct InstallRecipe {
 /// A binary fallback download (matrix URLs).
 #[derive(Debug, Clone)]
 pub struct BinaryDownload {
-    /// URL template with `{os}` (linux/darwin), `{OS}` (Linux/Darwin),
-    /// `{arch}` (amd64/arm64) and `{x64}` (x86_64/arm64) placeholders.
+    /// URL template with `{os}` (linux/darwin/windows), `{OS}`
+    /// (Linux/Darwin/Windows), `{arch}` (amd64/arm64) and `{x64}`
+    /// (x86_64/arm64) placeholders.
     pub url_template: &'static str,
+    /// Optional Windows URL template (same placeholders). Windows artifacts
+    /// differ from unix ones (`.zip` instead of `.tar.gz`, `.exe` names), so
+    /// `None` = render [`Self::url_template`] with `os = "windows"`.
+    pub windows_url_template: Option<&'static str>,
     /// Paths inside the archive to extract (empty = the download *is* the
     /// binary). Destination file name = the member's basename.
     pub members: &'static [&'static str],
+    /// Windows archive members (same shape; Windows zips contain `.exe`
+    /// binaries). Empty = the download *is* the binary (installed as
+    /// `<command>.exe`).
+    pub windows_members: &'static [&'static str],
     /// Expected SHA-256 digests of the downloaded artifact, keyed by the
     /// canonical `"{os}-{arch}"` platform key (`linux-amd64`,
-    /// `linux-arm64`, `darwin-amd64`, `darwin-arm64`). Downloads whose
-    /// platform has no entry are refused. Digests are pinned constants,
-    /// transcribed from the upstream `.sha256sum`/`checksums.txt` release
-    /// assets (see the registry comments for the per-tool source).
+    /// `linux-arm64`, `darwin-amd64`, `darwin-arm64`, `windows-amd64`).
+    /// Downloads whose platform has no entry are refused. Digests are pinned
+    /// constants, transcribed from the upstream `.sha256sum`/`checksums.txt`
+    /// release assets (see the registry comments for the per-tool source).
     pub sha256: &'static [(&'static str, &'static str)],
 }
 
@@ -263,6 +280,8 @@ pub enum OsKind {
     Linux,
     /// macOS.
     Macos,
+    /// Windows (winget/choco first, then binary fallback).
+    Windows,
     /// Anything else (no package recipes apply; binary fallback may still).
     Other,
 }
@@ -278,6 +297,10 @@ pub enum PkgManager {
     Apt,
     /// pacman (Arch).
     Pacman,
+    /// winget (Windows).
+    Winget,
+    /// Chocolatey (Windows).
+    Choco,
 }
 
 /// The detected local platform.
@@ -297,6 +320,7 @@ pub fn detect_platform() -> Platform {
     let os = match std::env::consts::OS {
         "linux" => OsKind::Linux,
         "macos" => OsKind::Macos,
+        "windows" => OsKind::Windows,
         _ => OsKind::Other,
     };
     let pkg_manager = if find_in_path(&path_entries(), "brew").is_some() {
@@ -307,6 +331,10 @@ pub fn detect_platform() -> Platform {
         Some(PkgManager::Apt)
     } else if find_in_path(&path_entries(), "pacman").is_some() {
         Some(PkgManager::Pacman)
+    } else if find_in_path(&path_entries(), "winget").is_some() {
+        Some(PkgManager::Winget)
+    } else if find_in_path(&path_entries(), "choco").is_some() {
+        Some(PkgManager::Choco)
     } else {
         None
     };
@@ -326,15 +354,30 @@ pub fn path_entries() -> Vec<PathBuf> {
 }
 
 /// Look `command` up in the given directories (PATH semantics: first match
-/// wins; must be a file with the executable bit set).
+/// wins; must be a file with the executable bit set — on Windows, PATHEXT
+/// probing: `command`, then `command.exe`, `command.bat`, `command.cmd`).
 pub fn find_in_path(dirs: &[PathBuf], command: &str) -> Option<PathBuf> {
-    for dir in dirs {
-        let candidate = dir.join(command);
-        if candidate.is_file() && is_executable(&candidate) {
-            return Some(candidate);
+    #[cfg(unix)]
+    {
+        for dir in dirs {
+            let candidate = dir.join(command);
+            if candidate.is_file() && is_executable(&candidate) {
+                return Some(candidate);
+            }
         }
+        None
     }
-    None
+    #[cfg(windows)]
+    {
+        for dir in dirs {
+            for candidate in pathext_candidates(dir, command) {
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+        None
+    }
 }
 
 #[cfg(unix)]
@@ -346,9 +389,24 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
-#[cfg(not(unix))]
-fn is_executable(path: &Path) -> bool {
-    path.is_file()
+/// PATHEXT-style candidate names for `command` in `dir`: the bare name, then
+/// the common executable extensions (`.exe`, `.bat`, `.cmd`) appended — so
+/// `find_in_path(..., "kind")` finds `kind.exe`. A command that already
+/// carries an extension is probed as-is only.
+#[cfg(windows)]
+fn pathext_candidates(dir: &Path, command: &str) -> Vec<PathBuf> {
+    let has_extension = Path::new(command)
+        .extension()
+        .is_some_and(|ext| !ext.is_empty());
+    if has_extension {
+        return vec![dir.join(command)];
+    }
+    let mut candidates = Vec::with_capacity(4);
+    candidates.push(dir.join(command));
+    for ext in [".exe", ".bat", ".cmd"] {
+        candidates.push(dir.join(format!("{command}{ext}")));
+    }
+    candidates
 }
 
 /// Default install dir for binary fallbacks (`$HOME/.local/bin`).
@@ -576,6 +634,14 @@ pub fn plan_install_for(id: ToolId, platform: &Platform, bin_dir: &Path) -> Resu
     let mut steps = Vec::new();
     let mut verify = Vec::new();
 
+    if platform.os == OsKind::Windows && tool.install.windows_unsupported {
+        return Err(DepsError::NoInstallRecipe {
+            tool: tool.display.to_string(),
+            reason: "not supported on Windows (POSIX shell script)".to_string(),
+        }
+        .into());
+    }
+
     let pkg = match (platform.os, platform.pkg_manager) {
         (OsKind::Macos, Some(PkgManager::Brew)) | (OsKind::Linux, Some(PkgManager::Brew)) => {
             // Homebrew cask takes precedence for docker (GUI app) on macOS.
@@ -638,6 +704,26 @@ pub fn plan_install_for(id: ToolId, platform: &Platform, bin_dir: &Path) -> Resu
             };
             (program, args)
         }),
+        (OsKind::Windows, Some(PkgManager::Winget)) => tool.install.winget.map(|id| {
+            (
+                "winget",
+                vec![
+                    "install".to_string(),
+                    "--id".to_string(),
+                    id.to_string(),
+                    "-e".to_string(),
+                    "--silent".to_string(),
+                    "--accept-source-agreements".to_string(),
+                    "--accept-package-agreements".to_string(),
+                ],
+            )
+        }),
+        (OsKind::Windows, Some(PkgManager::Choco)) => tool.install.choco.map(|pkg| {
+            (
+                "choco",
+                vec!["install".to_string(), "-y".to_string(), pkg.to_string()],
+            )
+        }),
         _ => None,
     };
 
@@ -675,6 +761,7 @@ pub fn plan_install_for(id: ToolId, platform: &Platform, bin_dir: &Path) -> Resu
 fn render_platform(template: &str, platform: &Platform, arch: &str) -> String {
     let (os, os_caps) = match platform.os {
         OsKind::Macos => ("darwin", "Darwin"),
+        OsKind::Windows => ("windows", "Windows"),
         _ => ("linux", "Linux"),
     };
     let (arch, x64) = if arch == "aarch64" {
@@ -698,10 +785,11 @@ fn arch_name() -> &'static str {
 }
 
 /// The canonical `"{os}-{arch}"` platform key used to look up pinned
-/// SHA-256 digests (os ∈ {linux, darwin}; arch ∈ {amd64, arm64}).
+/// SHA-256 digests (os ∈ {linux, darwin, windows}; arch ∈ {amd64, arm64}).
 fn platform_key(platform: &Platform, arch: &str) -> String {
     let os = match platform.os {
         OsKind::Macos => "darwin",
+        OsKind::Windows => "windows",
         _ => "linux",
     };
     format!("{os}-{arch}")
@@ -715,6 +803,9 @@ fn build_binary_steps(
     steps: &mut Vec<InstallStep>,
     verify: &mut Vec<DownloadVerify>,
 ) -> Result<()> {
+    if platform.os == OsKind::Windows {
+        return build_binary_steps_windows(tool, binary, platform, bin_dir, steps, verify);
+    }
     let arch = arch_name();
     let url = render_platform(binary.url_template, platform, arch);
     let download_path = bin_dir.join(format!(".kb-dl-{}", tool.detect.command));
@@ -833,6 +924,152 @@ fn build_binary_steps(
             download_path.to_string_lossy().to_string(),
             extract_dir.to_string_lossy().to_string(),
         ],
+    });
+    Ok(())
+}
+
+/// Windows branch of [`build_binary_steps`]: same shape (download → sha256
+/// verify → extract → install → cleanup) using the OS-bundled `curl.exe` and
+/// `tar.exe` (Win10 1803+, bsdtar handles `.zip`) plus PowerShell one-liners
+/// for mkdir/mv/rm — no chmod on Windows (binaries don't carry an exec bit).
+fn build_binary_steps_windows(
+    tool: &Tool,
+    binary: &BinaryDownload,
+    platform: &Platform,
+    bin_dir: &Path,
+    steps: &mut Vec<InstallStep>,
+    verify: &mut Vec<DownloadVerify>,
+) -> Result<()> {
+    let arch = arch_name();
+    let url = match binary.windows_url_template {
+        Some(template) => render_platform(template, platform, arch),
+        None => render_platform(binary.url_template, platform, arch),
+    };
+    let download_path = bin_dir.join(format!(".kb-dl-{}", tool.detect.command));
+
+    // ps_quote: escape a path for a PowerShell single-quoted string by
+    // doubling embedded single quotes (Windows usernames/paths may contain
+    // them, e.g. C:\Users\O'Brien\...). PS has no other quoting rule inside
+    // '...' literals.
+    fn ps_quote(path: &Path) -> String {
+        path.display().to_string().replace('\'', "''")
+    }
+
+    let powershell_args = |script: String| {
+        vec![
+            "-NoProfile".to_string(),
+            "-NonInteractive".to_string(),
+            "-Command".to_string(),
+            script,
+        ]
+    };
+
+    steps.push(InstallStep {
+        description: format!("create install dir {}", bin_dir.display()),
+        program: "powershell".to_string(),
+        args: powershell_args(format!(
+            "New-Item -ItemType Directory -Force -Path '{}' | Out-Null",
+            ps_quote(bin_dir)
+        )),
+    });
+    steps.push(InstallStep {
+        description: format!("download {}", tool.display),
+        program: "curl.exe".to_string(),
+        args: vec![
+            "-L".to_string(),
+            "--fail".to_string(),
+            "--silent".to_string(),
+            "--show-error".to_string(),
+            "--proto=https".to_string(),
+            "--proto-redir=https".to_string(),
+            "--max-filesize".to_string(),
+            (256 * 1024 * 1024).to_string(),
+            "-o".to_string(),
+            download_path.to_string_lossy().to_string(),
+            url,
+        ],
+    });
+
+    let key = platform_key(platform, arch);
+    let expected = binary
+        .sha256
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, digest)| *digest)
+        .ok_or_else(|| DepsError::NoInstallRecipe {
+            tool: tool.display.to_string(),
+            reason: format!("no pinned sha256 for platform {key}"),
+        })?;
+    verify.push(DownloadVerify {
+        file: download_path.clone(),
+        expected_sha256: expected,
+        description: format!("verify {} (sha256)", tool.display),
+    });
+
+    if binary.windows_members.is_empty() {
+        // The download IS the binary: install it as `<command>.exe` (the
+        // Windows loader resolves extensionless program names to .exe).
+        let target = bin_dir.join(format!("{}.exe", tool.detect.command));
+        steps.push(InstallStep {
+            description: format!("install {} to {}", tool.display, bin_dir.display()),
+            program: "powershell".to_string(),
+            args: powershell_args(format!(
+                "Move-Item -Force '{}' '{}'",
+                ps_quote(&download_path),
+                ps_quote(&target)
+            )),
+        });
+        return Ok(());
+    }
+
+    let extract_dir = bin_dir.join(format!(".kb-extract-{}", tool.detect.command));
+    steps.push(InstallStep {
+        description: format!("create extract dir {}", extract_dir.display()),
+        program: "powershell".to_string(),
+        args: powershell_args(format!(
+            "New-Item -ItemType Directory -Force -Path '{}' | Out-Null",
+            ps_quote(&extract_dir)
+        )),
+    });
+    let mut tar_args = vec![
+        "-xf".to_string(),
+        download_path.to_string_lossy().to_string(),
+        "-C".to_string(),
+        extract_dir.to_string_lossy().to_string(),
+    ];
+    for member in binary.windows_members {
+        tar_args.push(render_platform(member, platform, arch));
+    }
+    steps.push(InstallStep {
+        description: format!("extract {}", tool.display),
+        program: "tar.exe".to_string(),
+        args: tar_args,
+    });
+    for member in binary.windows_members {
+        let rendered = render_platform(member, platform, arch);
+        let file_name = Path::new(&rendered)
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| rendered.clone());
+        let extracted = extract_dir.join(&rendered);
+        steps.push(InstallStep {
+            description: format!("install {file_name} to {}", bin_dir.display()),
+            program: "powershell".to_string(),
+            args: powershell_args(format!(
+                "Move-Item -Force '{}' '{}'",
+                ps_quote(&extracted),
+                ps_quote(&bin_dir.join(&file_name))
+            )),
+        });
+    }
+    steps.push(InstallStep {
+        description: "clean up download".to_string(),
+        program: "powershell".to_string(),
+        args: powershell_args(format!(
+            "Remove-Item -Recurse -Force '{}','{}'",
+            ps_quote(&download_path),
+            ps_quote(&extract_dir)
+        )),
     });
     Ok(())
 }
@@ -969,8 +1206,10 @@ pub async fn install_with_progress(
 
 fn step_timeout(step: &InstallStep) -> std::time::Duration {
     match step.program.as_str() {
-        "curl" => DOWNLOAD_TIMEOUT,
-        "mkdir" | "chmod" | "mv" | "rm" | "tar" => std::time::Duration::from_secs(60),
+        "curl" | "curl.exe" => DOWNLOAD_TIMEOUT,
+        "mkdir" | "chmod" | "mv" | "rm" | "tar" | "tar.exe" | "powershell" => {
+            std::time::Duration::from_secs(60)
+        }
         _ => PKG_INSTALL_TIMEOUT,
     }
 }
@@ -1036,10 +1275,13 @@ mod tests {
     fn make_stub(dir: &Path, name: &str, body: &str) {
         let path = dir.join(name);
         std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&path).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&path, perms).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&path, perms).unwrap();
+        }
     }
 
     fn linux_dnf(pkexec: bool) -> Platform {
@@ -1062,6 +1304,30 @@ mod tests {
         Platform {
             os: OsKind::Macos,
             pkg_manager: Some(PkgManager::Brew),
+            pkexec: false,
+        }
+    }
+
+    fn windows() -> Platform {
+        Platform {
+            os: OsKind::Windows,
+            pkg_manager: Some(PkgManager::Winget),
+            pkexec: false,
+        }
+    }
+
+    fn windows_choco() -> Platform {
+        Platform {
+            os: OsKind::Windows,
+            pkg_manager: Some(PkgManager::Choco),
+            pkexec: false,
+        }
+    }
+
+    fn windows_none() -> Platform {
+        Platform {
+            os: OsKind::Windows,
+            pkg_manager: None,
             pkexec: false,
         }
     }
@@ -1621,6 +1887,167 @@ mod tests {
     }
 
     #[test]
+    fn plan_kind_on_windows_uses_winget() {
+        let plan = plan_install_for(ToolId::Kind, &windows(), Path::new("/x")).unwrap();
+        assert_eq!(plan.steps.len(), 1);
+        assert_eq!(plan.steps[0].program, "winget");
+        assert_eq!(
+            plan.steps[0].args,
+            vec![
+                "install",
+                "--id",
+                "Kubernetes.kind",
+                "-e",
+                "--silent",
+                "--accept-source-agreements",
+                "--accept-package-agreements"
+            ]
+        );
+    }
+
+    #[test]
+    fn plan_docker_on_windows_uses_choco_when_no_winget() {
+        let plan = plan_install_for(ToolId::Docker, &windows_choco(), Path::new("/x")).unwrap();
+        assert_eq!(plan.steps.len(), 1);
+        assert_eq!(plan.steps[0].program, "choco");
+        assert_eq!(plan.steps[0].args, vec!["install", "-y", "docker-desktop"]);
+    }
+
+    #[test]
+    fn plan_helm_on_windows_without_manager_uses_zip_binary() {
+        // No winget/choco → binary fallback: curl.exe + tar.exe (zip) +
+        // PowerShell move, no chmod, sha256-pinned windows-amd64 artifact.
+        let plan = plan_install_for(
+            ToolId::Helm,
+            &windows_none(),
+            Path::new("C:/Users/u/.local/bin"),
+        )
+        .unwrap();
+        let curl = plan.steps.iter().find(|s| s.program == "curl.exe").unwrap();
+        assert_eq!(
+            curl.args.last().unwrap(),
+            "https://get.helm.sh/helm-v4.2.2-windows-amd64.zip"
+        );
+        let tar = plan.steps.iter().find(|s| s.program == "tar.exe").unwrap();
+        assert_eq!(tar.args[0], "-xf");
+        assert_eq!(tar.args[3], "C:/Users/u/.local/bin/.kb-extract-helm");
+        assert_eq!(tar.args[4], "windows-amd64/helm.exe");
+        let moves: Vec<String> = plan
+            .steps
+            .iter()
+            .filter(|s| s.program == "powershell" && s.args[3].contains("Move-Item"))
+            .map(|s| s.args[3].clone())
+            .collect();
+        assert_eq!(moves.len(), 1, "{moves:?}");
+        assert!(
+            moves[0].ends_with("'C:/Users/u/.local/bin/helm.exe'"),
+            "{}",
+            moves[0]
+        );
+        assert!(
+            !plan.steps.iter().any(|s| s.program == "chmod"),
+            "windows plans never chmod"
+        );
+        assert_eq!(plan.verify.len(), 1);
+        assert_eq!(
+            plan.verify[0].expected_sha256,
+            "5fad8562e98c34fa5af3ef904086a5874a6701050f9bf36e30238c975df94dcd"
+        );
+    }
+
+    #[test]
+    fn plan_kind_on_windows_binary_fallback_installs_kind_exe() {
+        // kind has no zip: the download IS the binary and must land as
+        // `kind.exe` (extensionless names are not executable on Windows).
+        let plan = plan_install_for(
+            ToolId::Kind,
+            &windows_none(),
+            Path::new("C:/Users/u/.local/bin"),
+        )
+        .unwrap();
+        let curl = plan.steps.iter().find(|s| s.program == "curl.exe").unwrap();
+        assert_eq!(
+            curl.args.last().unwrap(),
+            "https://kind.sigs.k8s.io/dl/v0.33.0/kind-windows-amd64"
+        );
+        let install = plan
+            .steps
+            .iter()
+            .find(|s| s.program == "powershell" && s.args[3].contains("Move-Item"))
+            .unwrap();
+        assert!(
+            install.args[3].ends_with("'C:/Users/u/.local/bin/kind.exe'"),
+            "{}",
+            install.args[3]
+        );
+        assert_eq!(
+            plan.verify[0].expected_sha256,
+            "4b22adaa135368c5a465d56bbd8e520cbea87272a06ca00b6078e7b81515c9fc"
+        );
+    }
+
+    #[test]
+    fn plan_kubectx_on_windows_is_unsupported_with_honest_error() {
+        // kubectx is a POSIX shell script — every Windows plan fails before
+        // any winget/choco/binary attempt.
+        for platform in [windows(), windows_choco(), windows_none()] {
+            let err = plan_install_for(ToolId::Kubectx, &platform, Path::new("/x")).unwrap_err();
+            match err {
+                CoreError::Deps(DepsError::NoInstallRecipe { tool, reason }) => {
+                    assert_eq!(tool, "kubectx");
+                    assert!(
+                        reason.contains("Windows"),
+                        "reason must name Windows: {reason}"
+                    );
+                }
+                other => panic!("expected NoInstallRecipe, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn binary_fallback_renders_windows_urls_for_every_tool() {
+        // Windows binary-fallback URLs must match the upstream release
+        // assets (verified at implementation time, ADR-0019).
+        let cases: Vec<(ToolId, &str)> = vec![
+            (
+                ToolId::Kind,
+                "https://kind.sigs.k8s.io/dl/v0.33.0/kind-windows-amd64",
+            ),
+            (
+                ToolId::Kubectl,
+                "https://dl.k8s.io/release/v1.37.0/bin/windows/amd64/kubectl.exe",
+            ),
+            (
+                ToolId::Helm,
+                "https://get.helm.sh/helm-v4.2.2-windows-amd64.zip",
+            ),
+            (
+                ToolId::Cilium,
+                "https://github.com/cilium/cilium-cli/releases/download/v0.20.0/cilium-windows-amd64.zip",
+            ),
+            (
+                ToolId::K9s,
+                "https://github.com/derailed/k9s/releases/download/v0.51.0/k9s_Windows_amd64.zip",
+            ),
+            (
+                ToolId::Kustomize,
+                "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/v5.8.1/kustomize_v5.8.1_windows_amd64.zip",
+            ),
+        ];
+        for (id, expected) in cases {
+            let plan = plan_install_for(id, &windows_none(), Path::new("C:/tmp/bin")).unwrap();
+            let curl = plan
+                .steps
+                .iter()
+                .find(|step| step.program == "curl.exe")
+                .unwrap_or_else(|| panic!("{id:?} must have a curl.exe download step"));
+            let url = curl.args.last().expect("curl.exe step needs a url arg");
+            assert_eq!(url, expected, "URL mismatch for {id:?}");
+        }
+    }
+
+    #[test]
     fn binary_plan_steps_have_no_empty_args() {
         for id in [
             ToolId::Kind,
@@ -1708,8 +2135,10 @@ mod tests {
 
     #[test]
     fn every_binary_plan_pins_a_sha256_for_all_platforms() {
-        // Each tool must pin digests for linux/darwin × amd64/arm64, and
-        // the current-host platform must resolve to a verify entry.
+        // Each tool must pin digests for linux/darwin × amd64/arm64, plus
+        // windows-amd64 for every Windows-capable tool (kubectx is a POSIX
+        // script — explicitly unsupported, so it must NOT pin one). Every
+        // platform must resolve to exactly one verify entry.
         for id in [
             ToolId::Kind,
             ToolId::Kubectl,
@@ -1729,6 +2158,18 @@ mod tests {
                     "{id:?} missing digest for {key}"
                 );
             }
+            let windows_pin = binary
+                .sha256
+                .iter()
+                .any(|(k, digest)| *k == "windows-amd64" && digest.len() == 64);
+            if tool(id).unwrap().install.windows_unsupported {
+                assert!(
+                    !windows_pin,
+                    "{id:?} is windows-unsupported; must not pin windows-amd64"
+                );
+            } else {
+                assert!(windows_pin, "{id:?} missing digest for windows-amd64");
+            }
             let darwin_none = Platform {
                 os: OsKind::Macos,
                 pkg_manager: None,
@@ -1744,6 +2185,19 @@ mod tests {
                 assert!(
                     plan.verify[0].file.to_string_lossy().contains(".kb-dl-"),
                     "{id:?} verify must target the download file"
+                );
+                assert_eq!(plan.verify[0].expected_sha256.len(), 64);
+            }
+            if !tool(id).unwrap().install.windows_unsupported {
+                let plan = plan_install_for(id, &windows_none(), Path::new("/tmp/bin")).unwrap();
+                assert_eq!(
+                    plan.verify.len(),
+                    1,
+                    "{id:?} must have exactly one windows download verification"
+                );
+                assert!(
+                    plan.verify[0].file.to_string_lossy().contains(".kb-dl-"),
+                    "{id:?} windows verify must target the download file"
                 );
                 assert_eq!(plan.verify[0].expected_sha256.len(), 64);
             }

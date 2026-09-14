@@ -15,7 +15,7 @@ Cilium** ingress, Hubble observability, the Gateway API, and cluster mesh.
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 ![Rust](https://img.shields.io/badge/rust-1.98+-orange)
-![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-9cf)
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-9cf)
 
 > by Orlando Rosa Pereira — [github.com/Orpere](https://github.com/Orpere)
 
@@ -120,6 +120,21 @@ prebuilt signed binary from GitHub releases, verifies its checksum, and clears
 the download quarantine flag: no Xcode tools, no Gatekeeper prompt, no Apple
 account.
 
+**Windows (prebuilt):** run this PowerShell one-liner — it downloads the
+checksum-verified prebuilt binary from GitHub releases, installs it to
+`%USERPROFILE%\.local\bin`, clears the Mark-of-the-Web (no SmartScreen
+prompt), and launches it:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1 -Run
+```
+
+(from the repo: `make win-run` / `make win-install`). No admin rights, no
+registry writes; x86_64 only. Windows from source: native
+`cargo build --release` via the standard rustup MSVC toolchain — `build.sh`
+is bash-only, so windows cross-builds happen on Linux (mingw64-gcc, see
+ADR-0019).
+
 **From source** (Rust 1.98+):
 
 ```bash
@@ -183,12 +198,15 @@ watch errors). Detached runs always write to a log file, so
 | `make mac-app` | macOS only: build + open a double-clickable `dist/kindboard.app` (locally built → zero Gatekeeper prompts; see docs/macos-distribution.md) |
 | `make mac-install` | macOS: install the prebuilt signed kindboard from GitHub releases — no Xcode, no Gatekeeper prompts, no Apple account |
 | `make mac-run` | macOS: install (if needed) and launch kindboard — the zero-toolchain way to run |
+| `make win-install` | Windows: install the prebuilt kindboard from GitHub releases — no admin, no SmartScreen prompt |
+| `make win-run` | Windows: install (if needed) + launch kindboard |
+| `make check-targets` | Compile-gate for every supported OS target: host tests + windows/darwin `cargo check --all-targets` when the toolchains are present |
 | `make check` | All quality gates: `fmt --check`, `clippy -D warnings`, tests |
 | `make test` | Unit + integration tests (e2e skipped unless `KINDBOARD_E2E=1`) |
 | `make e2e` | Full suite including real-kind e2e (requires docker + kind; throwaway `kbtest-*` clusters). Covers cluster create/delete, kubeconfig merge, topology, and the CNI matrix (flannel/calico/cilium full installs) |
 | `make audit` | RustSec advisory scan (needs `cargo install cargo-audit`) |
 | `make build` / `make dist` | Release build into `dist/` + `SHA256SUMS` (runs all gates first) |
-| `make build-all` | Attempt all four targets: linux x86_64/aarch64, darwin x86_64/arm64. Runs `darwin-bootstrap` first, then on Linux hosts the darwin targets build via osxcross when it is present (see ADR-0017), else they are skipped with guidance |
+| `make build-all` | Attempt all supported targets: linux x86_64/aarch64, darwin x86_64/arm64, windows x86_64. Runs `darwin-bootstrap` first, then cross targets build when their toolchains are present (osxcross for darwin — see ADR-0017, mingw64-gcc for windows — see ADR-0019), else they are skipped with guidance |
 | `make dist-macos` | Cross-build darwin release assets with `KINDBOARD_REQUIRE_DARWIN=1`; auto-resolves all darwin dependencies first via `make darwin-bootstrap`; binaries are ad-hoc signed via rcodesign |
 | `make darwin-bootstrap` | Resolve all darwin (macOS) cross-build dependencies — host packages (sudo, confirm-first or `KINDBOARD_BOOTSTRAP_YES=1`), rustup targets, rcodesign, osxcross toolchain + digest-pinned SDK. Idempotent; `--check` mode via `./scripts/bootstrap-darwin.sh --check` |
 | `make assets` | Fetch + resize the official logos into `assets/` (ImageMagick) |
@@ -196,6 +214,8 @@ watch errors). Detached runs always write to a log file, so
 | `make help` | List all targets |
 
 Scripts: `scripts/build.sh` (reproducible release pipeline) ·
+`scripts/install-macos.sh` / `scripts/install-windows.ps1` (prebuilt
+installers) · `scripts/check-targets.sh` (cross-target compile gate) ·
 `scripts/prepare-assets.sh` (logo pipeline). No GitHub Actions — builds are
 local by design.
 

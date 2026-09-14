@@ -12,6 +12,15 @@
 # dist-macos, build-all, and release. KINDBOARD_REQUIRE_DARWIN=1 makes darwin
 # mandatory (`make dist-macos`; see also `make release`).
 #
+# Windows assets: scripts/build.sh cross-builds x86_64-pc-windows-gnu via the
+# mingw64 GCC toolchain (dnf install mingw64-gcc, see ADR-0019), producing
+# dist/kindboard-windows-x86_64.zip (zip-only, unsigned — SmartScreen/MOTW is
+# neutralized by scripts/install-windows.ps1 at install time).
+# KINDBOARD_REQUIRE_WINDOWS=1 makes windows mandatory. `make win-install` /
+# `make win-run` are the PowerShell prebuilt-installer entry points on Windows.
+# `make check-targets` runs the cross-target compile gate (host tests + every
+# available windows/darwin cargo check).
+#
 # No GitHub Actions by design: releases and the GitHub Pages deploy both run
 # from here (see `make release` and `make publish`). On macOS, `make mac-app`
 # (scripts/make-mac-app.sh) assembles a double-clickable dist/kindboard.app
@@ -25,6 +34,8 @@ CARGO ?= cargo
 CARGO_AUDIT ?= $(HOME)/.cargo/bin/cargo-audit
 KINDBOARD_REQUIRE_DARWIN ?= 0
 export KINDBOARD_REQUIRE_DARWIN
+KINDBOARD_REQUIRE_WINDOWS ?= 0
+export KINDBOARD_REQUIRE_WINDOWS
 DIST_DIR := dist
 ROOT := $(abspath .)
 REPO ?= Orpere/kindboard
@@ -32,7 +43,7 @@ VERSION := $(shell grep -m1 '^version' crates/kindboard-app/Cargo.toml | cut -d'
 UNAME_S := $(shell uname -s)
 PAGES_DIR := /tmp/kindboard-pages
 
-.PHONY: help all build build-all dist-macos darwin-bootstrap run mac-app mac-install mac-run fmt fmt-check clippy test e2e audit check assets dist clean version release publish
+.PHONY: help all build build-all dist-macos darwin-bootstrap run mac-app mac-install mac-run win-install win-run fmt fmt-check clippy test e2e audit check check-targets assets dist clean version release publish
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -42,7 +53,7 @@ all: check build ## Quality gates + host release build into dist/
 build: ## Host release build (fmt+clippy+test+audit gates, then dist/ + SHA256SUMS)
 	./scripts/build.sh
 
-build-all: darwin-bootstrap ## Attempt all 4 targets: linux x86_64/aarch64, darwin x86_64/arm64 (deps auto-resolved; darwin builds when osxcross is present, else skips)
+build-all: darwin-bootstrap ## Attempt all supported targets: linux x86_64/aarch64, darwin x86_64/arm64, windows x86_64 (deps auto-resolved; darwin builds when osxcross is present, windows when mingw64-gcc is present, else skipped)
 	./scripts/build.sh --all
 
 darwin-bootstrap: ## Resolve all darwin cross-build dependencies (host pkgs, rustup targets, rcodesign, osxcross + pinned SDK)
@@ -68,6 +79,15 @@ mac-install: ## (macOS) install the prebuilt signed kindboard from GitHub releas
 
 mac-run: ## (macOS) install (if needed) and launch kindboard — the zero-toolchain way to run
 	./scripts/install-macos.sh --run
+
+win-install: ## (Windows) install the prebuilt kindboard from GitHub releases — no admin, no SmartScreen prompt
+	powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1
+
+win-run: ## (Windows) install (if needed) + launch kindboard
+	powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1 -Run
+
+check-targets: ## Verify the code compiles for ALL supported OS targets (host tests + windows/darwin checks when toolchains present)
+	./scripts/check-targets.sh
 
 fmt: ## Format all code
 	cargo fmt --all

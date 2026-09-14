@@ -7,7 +7,9 @@
 //! 2. On Unix the child runs in its **own process group**
 //!    (`process_group(0)`, the safe std API equivalent to `setpgid(0, 0)`),
 //!    so cancellation/timeout can reap the whole tree with `killpg`
-//!    (TERM → 5 s grace → KILL), no zombie leaks.
+//!    (TERM → 5 s grace → KILL), no zombie leaks. On Windows the tree is
+//!    terminated with `taskkill /PID <n> /T [/F]` (fire-and-forget; see
+//!    [`terminate_tree`]).
 //! 3. stdout is streamed as lines; stderr keeps a bounded tail (2 KiB) for
 //!    error messages.
 //! 4. Every call has a deadline; exit code 0 is the only success signal.
@@ -187,6 +189,9 @@ impl Cmd {
             .stderr(std::process::Stdio::piped());
         #[cfg(unix)]
         command.process_group(0);
+        // GUI-spawned CLI tools must never flash a console window.
+        #[cfg(windows)]
+        command.creation_flags(CREATE_NO_WINDOW);
         let mut child = command.spawn().map_err(|source| ExecError::Spawn {
             prog: self.program.clone(),
             source,
@@ -215,10 +220,16 @@ impl Cmd {
             };
             token.cancelled().await;
             if !watcher_reaped.load(Ordering::SeqCst) {
+                #[cfg(unix)]
                 signal_group(pid, nix::sys::signal::Signal::SIGTERM);
+                #[cfg(windows)]
+                terminate_tree(pid, false);
                 tokio::time::sleep(KILL_GRACE).await;
                 if !watcher_reaped.load(Ordering::SeqCst) {
+                    #[cfg(unix)]
                     signal_group(pid, nix::sys::signal::Signal::SIGKILL);
+                    #[cfg(windows)]
+                    terminate_tree(pid, true);
                 }
             }
         });
@@ -358,14 +369,22 @@ impl ProcessHandle {
         self.pid
     }
 
-    /// Send SIGTERM to the child's process group.
+    /// Send SIGTERM to the child's process group (unix) / terminate the
+    /// child's process tree without force (windows, `taskkill /T`).
     pub fn terminate_group(&self) {
+        #[cfg(unix)]
         signal_group(self.pid, nix::sys::signal::Signal::SIGTERM);
+        #[cfg(windows)]
+        terminate_tree(self.pid, false);
     }
 
-    /// Send SIGKILL to the child's process group.
+    /// Send SIGKILL to the child's process group (unix) / force-terminate
+    /// the child's process tree (windows, `taskkill /T /F`).
     pub fn kill_group(&self) {
+        #[cfg(unix)]
         signal_group(self.pid, nix::sys::signal::Signal::SIGKILL);
+        #[cfg(windows)]
+        terminate_tree(self.pid, true);
     }
 
     /// Wait for the process and return its output.
@@ -510,10 +529,11 @@ impl ProcessHandle {
 impl Drop for ProcessHandle {
     /// A handle dropped without `wait` must not leak the child (worker
     /// shutdown/abort drops tasks mid-run): kill the whole process group
-    /// immediately. Drop cannot await the TERM grace, so SIGKILL is the
-    /// only ladder step that fits. `reaped` guards against signalling a
-    /// group that no longer belongs to this child (set by every `wait`
-    /// terminal path before the handle is dropped).
+    /// (unix) / tree (windows) immediately. Drop cannot await the TERM
+    /// grace, so SIGKILL / `taskkill /T /F` is the only ladder step that
+    /// fits. `reaped` guards against signalling a group that no longer
+    /// belongs to this child (set by every `wait` terminal path before the
+    /// handle is dropped).
     fn drop(&mut self) {
         if !self.reaped.load(Ordering::SeqCst) {
             self.kill_group();
@@ -532,12 +552,49 @@ enum OutcomeError {
 /// the worst-case latency added to detecting a normal exit).
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
+/// Win32 `CREATE_NO_WINDOW` (WinBase.h, 0x08000000): the spawned process runs
+/// without a console window. std removed its pre-defined constant, so the
+/// value is pinned here.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// Signal the child's process group (pgid == child pid via
 /// `process_group(0)`). ESRCH (already dead) is acceptable.
+#[cfg(unix)]
 fn signal_group(pid: Option<u32>, signal: nix::sys::signal::Signal) {
     if let Some(pid) = pid {
         let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pid as i32), signal);
     }
+}
+
+/// Terminate the child's whole process tree on Windows via
+/// `taskkill /PID <pid> /T` (+ `/F` when `force`), fire-and-forget.
+///
+/// Behavioral difference vs the Unix ladder (stated honestly): `taskkill`
+/// completes asynchronously *after* the spawned `taskkill.exe` exits, and we
+/// deliberately do not wait for it — Drop cannot await, and the cancel
+/// watcher must not block a tokio worker. The TERM → grace → KILL ladder
+/// therefore may overlap on Windows (the `/F` call can be issued while the
+/// non-force call is still running). For a tree kill this is harmless: the
+/// second call re-targets whatever is still alive, and the child's own
+/// `wait` still reaps the final exit code.
+#[cfg(windows)]
+fn terminate_tree(pid: Option<u32>, force: bool) {
+    use std::os::windows::process::CommandExt;
+    let Some(pid) = pid else {
+        return;
+    };
+    let mut args = vec!["/PID".to_string(), pid.to_string(), "/T".to_string()];
+    if force {
+        args.push("/F".to_string());
+    }
+    let _ = std::process::Command::new("taskkill")
+        .args(&args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
 
 /// Cut the stored tail down to the amount shown in error messages,
@@ -972,35 +1029,44 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_a_spawned_handle_kills_the_process_group() {
-        // A task abort / worker shutdown drops the handle without `wait`;
-        // the Drop guard must kill the whole group (no orphan children).
-        let handle = Cmd::new("sh")
-            .arg("-c")
-            .arg("sleep 30 & sleep 30")
-            .spawn()
-            .await
-            .unwrap();
-        let pid = handle.pid().unwrap();
-        drop(handle);
-        let mut dead = false;
-        for _ in 0..100 {
-            match nix::sys::wait::waitpid(
-                nix::unistd::Pid::from_raw(pid as i32),
-                Some(nix::sys::wait::WaitPidFlag::WNOHANG),
-            ) {
-                Ok(nix::sys::wait::WaitStatus::StillAlive) => {
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-                Err(_) | Ok(_) => {
-                    dead = true;
-                    break;
+        #[cfg(unix)]
+        {
+            // A task abort / worker shutdown drops the handle without `wait`;
+            // the Drop guard must kill the whole group (no orphan children).
+            let handle = Cmd::new("sh")
+                .arg("-c")
+                .arg("sleep 30 & sleep 30")
+                .spawn()
+                .await
+                .unwrap();
+            let pid = handle.pid().unwrap();
+            drop(handle);
+            let mut dead = false;
+            for _ in 0..100 {
+                match nix::sys::wait::waitpid(
+                    nix::unistd::Pid::from_raw(pid as i32),
+                    Some(nix::sys::wait::WaitPidFlag::WNOHANG),
+                ) {
+                    Ok(nix::sys::wait::WaitStatus::StillAlive) => {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    Err(_) | Ok(_) => {
+                        dead = true;
+                        break;
+                    }
                 }
             }
+            assert!(
+                dead,
+                "dropping the handle must kill the child process group"
+            );
         }
-        assert!(
-            dead,
-            "dropping the handle must kill the child process group"
-        );
+        #[cfg(windows)]
+        {
+            // Compile-only no-op: `taskkill` is fire-and-forget, and there is
+            // no Windows test runner to observe the Drop guard's tree kill
+            // (ADR-0019 defers Windows runtime verification to user machines).
+        }
     }
 
     /// A byte stream that returns one fixed chunk per `poll_read` call

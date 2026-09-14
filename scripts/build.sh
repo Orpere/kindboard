@@ -32,17 +32,29 @@
 #   - darwin targets on macOS are built natively (no osxcross needed); a
 #     native-cc pre-flight fails actionably before the build when Xcode
 #     Command Line Tools are missing
+#   - windows targets are cross-built on Linux via the mingw64 GCC toolchain
+#     (dnf install mingw64-gcc); when x86_64-w64-mingw32-gcc is missing the
+#     target is SKIPPED with that guidance, or the build FAILS when
+#     KINDBOARD_REQUIRE_WINDOWS=1
 #   - `make darwin-bootstrap` (scripts/bootstrap-darwin.sh) resolves ALL darwin
 #     build dependencies (host packages, rustup targets, rcodesign, osxcross +
 #     digest-pinned SDK) idempotently, and runs automatically before
 #     dist-macos / build-all / release; this script remains a pure builder
 #
 # Artifacts land in dist/ (gitignored):
-#   dist/<target>/kindboard          raw binary
+#   dist/<target>/kindboard          raw binary (kindboard.exe for windows)
 #   dist/kindboard-<os>-<arch>.tar.gz  tarball containing just the binary
 #   dist/kindboard-<os>-<arch>.zip   deterministic ZIP of the signed binary
 #                                    (notarized release mode only, see below)
-#   dist/SHA256SUMS                  sha256 of every tarball
+#   dist/kindboard-windows-x86_64.zip  deterministic ZIP (member kindboard.exe)
+#                                    of the windows binary — windows ships
+#                                    zip-only (no tarball) and unsigned:
+#                                    SmartScreen / Mark-of-the-Web is
+#                                    neutralized at install time by
+#                                    scripts/install-windows.ps1, so this
+#                                    build performs no code signing for
+#                                    windows (ADR-0019)
+#   dist/SHA256SUMS                  sha256 of every tarball + zip
 # darwin binaries are ad-hoc signed with rcodesign (pure Rust) before
 # tarballing; the signature is then verified (codesign --verify on macOS,
 # structural LC_CODE_SIGNATURE + CSMAGIC check on Linux) — see ADR-0018.
@@ -79,8 +91,10 @@
 # Exit status: 0 if the host target built successfully, or when the host was
 # not requested and every requested target built or was gracefully skipped.
 # 1 if the host target was requested and failed, if the host was not requested
-# and any requested target failed, if any gate failed, or when
-# KINDBOARD_REQUIRE_DARWIN=1 and a requested darwin target is missing or failed.
+# and any requested target failed, if any gate failed, when
+# KINDBOARD_REQUIRE_DARWIN=1 and a requested darwin target is missing or
+# failed, or when KINDBOARD_REQUIRE_WINDOWS=1 and a requested windows target
+# is missing or failed.
 #
 # Assets: icons and logos under assets/ are prepared separately by
 # scripts/prepare-assets.sh (network fetch + resize). They are NOT part of
@@ -114,12 +128,14 @@ RCODESIGN_BIN="${KINDBOARD_RCODESIGN:-$(command -v rcodesign || true)}"
 # build-time convenience for the osxcross toolchain and is never shipped.
 source "$SCRIPT_DIR/darwin-env.sh"
 KINDBOARD_REQUIRE_DARWIN="${KINDBOARD_REQUIRE_DARWIN:-0}"
+KINDBOARD_REQUIRE_WINDOWS="${KINDBOARD_REQUIRE_WINDOWS:-0}"
 
 SUPPORTED_TARGETS=(
     x86_64-unknown-linux-gnu
     aarch64-unknown-linux-gnu
     x86_64-apple-darwin
     aarch64-apple-darwin
+    x86_64-pc-windows-gnu
 )
 
 HOST_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
@@ -136,26 +152,6 @@ EOF
 }
 
 log() { printf 'build.sh: %s\n' "$*"; }
-
-# osxcross_wrapper <arch> <suffix>: print the matching osxcross wrapper path
-# (e.g. osxcross_wrapper aarch64 -clang) or nothing. The cmake-clang wrapper is
-# ignored — the plain clang wrapper is the cargo linker/CC.
-osxcross_wrapper() {
-    local arch=$1 suffix=$2 c
-    for c in "$OSXCROSS_DIR"/bin/${arch}-apple-darwin*${suffix}; do
-        [[ -e "$c" ]] || continue
-        [[ "${c##*/}" == *cmake* ]] && continue
-        printf '%s\n' "$c"
-        return 0
-    done
-    return 1
-}
-
-# osxcross_ready: both darwin arch clang wrappers exist.
-osxcross_ready() {
-    [[ -n "$(osxcross_wrapper x86_64 -clang)" ]] \
-        && [[ -n "$(osxcross_wrapper aarch64 -clang)" ]]
-}
 
 # verify_darwin_signature <binary>: confirm the Mach-O carries an embedded
 # code signature. On macOS uses the canonical codesign verifier. On Linux
@@ -236,6 +232,25 @@ ensure_macosx_sdk() {
     fi
 }
 
+# zip_deterministic <src-file> <zip-path> <member-name>: reproducible zip via
+# python3 zipfile (fixed timestamp 1980-01-01, deflate, unix attrs). Shared by
+# the darwin notarization archives and the windows release zips (ADR-0019).
+zip_deterministic() {
+    local src=$1 dst=$2 member=$3
+    rm -f "$dst"
+    python3 - "$src" "$dst" "$member" <<'PYEOF'
+import sys, zipfile
+src, dst, member = sys.argv[1], sys.argv[2], sys.argv[3]
+with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zf:
+    zi = zipfile.ZipInfo(member, (1980, 1, 1, 0, 0, 0))
+    zi.compress_type = zipfile.ZIP_DEFLATED
+    zi.create_system = 3
+    zi.external_attr = 0o755 << 16
+    with open(src, "rb") as f:
+        zf.writestr(zi, f.read())
+PYEOF
+}
+
 BUILD_ALL=0
 TARGETS=()
 
@@ -258,6 +273,9 @@ if ((${#TARGETS[@]} == 0)); then
     TARGETS=("$HOST_TARGET")
     if [[ "$KINDBOARD_REQUIRE_DARWIN" == "1" ]]; then
         TARGETS+=(x86_64-apple-darwin aarch64-apple-darwin)
+    fi
+    if [[ "$KINDBOARD_REQUIRE_WINDOWS" == "1" ]]; then
+        TARGETS+=(x86_64-pc-windows-gnu)
     fi
 fi
 
@@ -315,9 +333,11 @@ fi
 # ---------------------------------------------------------------------------
 
 DARWIN_REQUESTED_COUNT=0
+WINDOWS_REQUESTED_COUNT=0
 HOST_REQUESTED=0
 for t in "${TARGETS[@]}"; do
     [[ "$t" == *-apple-darwin ]] && DARWIN_REQUESTED_COUNT=$((DARWIN_REQUESTED_COUNT+1))
+    [[ "$t" == *-windows-* ]] && WINDOWS_REQUESTED_COUNT=$((WINDOWS_REQUESTED_COUNT+1))
     [[ "$t" == "$HOST_TARGET" ]] && HOST_REQUESTED=1
 done
 
@@ -337,6 +357,7 @@ mkdir -p "$DIST_DIR"
 declare -A RESULTS
 HOST_OK=0
 DARWIN_OK_COUNT=0
+WINDOWS_OK_COUNT=0
 BUILD_FAILURES=0
 NOTARIZE=0
 
@@ -355,8 +376,18 @@ for target in "${TARGETS[@]}"; do
         continue
     fi
     if [[ "$os" == "windows" ]]; then
-        RESULTS["$target"]="SKIPPED: windows targets are not supported by this script"
-        continue
+        # windows-gnu cross-build via the mingw64 GCC toolchain (ADR-0019)
+        if ! command -v x86_64-w64-mingw32-gcc >/dev/null; then
+            if [[ "$KINDBOARD_REQUIRE_WINDOWS" == "1" ]]; then
+                echo "build.sh: ERROR: windows target $target is REQUIRED (KINDBOARD_REQUIRE_WINDOWS=1)" >&2
+                echo "build.sh: but x86_64-w64-mingw32-gcc was not found — install it (dnf install mingw64-gcc)" >&2
+                exit 1
+            fi
+            RESULTS["$target"]="SKIPPED: x86_64-w64-mingw32-gcc not found; install mingw64-gcc (dnf install mingw64-gcc)"
+            continue
+        fi
+        # cargo convention: triple upper-cased with '-' -> '_'
+        WIN_LINKER_ENV="CARGO_TARGET_$(printf '%s' "$target" | tr '[:lower:]-' '[:upper:]_')_LINKER"
     fi
     DARWIN_CROSS=0
     if [[ "$os" == "darwin" && "$HOST_OS" != "Darwin" ]]; then
@@ -432,14 +463,27 @@ for target in "${TARGETS[@]}"; do
         else
             BUILD_RC=1
         fi
+    elif [[ "$os" == "windows" ]]; then
+        # env-scoped like the darwin block above: the mingw64 linker is set
+        # only for this single cargo invocation and never leaks into other
+        # targets' builds
+        if env \
+            "$WIN_LINKER_ENV=x86_64-w64-mingw32-gcc" \
+            cargo build --release --target "$target" --package kindboard-app; then
+            BUILD_RC=0
+        else
+            BUILD_RC=1
+        fi
     elif cargo build --release --target "$target" --package kindboard-app; then
         BUILD_RC=0
     else
         BUILD_RC=1
     fi
     if (( BUILD_RC == 0 )); then
+        BIN_NAME=kindboard
+        [[ "$os" == "windows" ]] && BIN_NAME=kindboard.exe
         mkdir -p "$DIST_DIR/$target"
-        cp "target/$target/release/kindboard" "$DIST_DIR/$target/kindboard"
+        cp "target/$target/release/$BIN_NAME" "$DIST_DIR/$target/$BIN_NAME"
         if [[ "$os" == "darwin" ]]; then
             # Never ship unsigned darwin assets — explicit failure over a
             # silently broken artifact. Unsigned + quarantine makes Gatekeeper
@@ -545,48 +589,54 @@ for target in "${TARGETS[@]}"; do
             fi
         fi
         rm -f "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz" "$DIST_DIR/kindboard-${os}-${arch_display}.zip"
-        GZIP=-n tar --owner=0 --group=0 --numeric-owner --mtime='@0' \
-            -C "$DIST_DIR/$target" -czf "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz" kindboard
-        if [[ "$os" == "darwin" ]] && (( NOTARIZE )); then
-            # Notarization mode: Apple notarizes ARCHIVES, not raw binaries,
-            # so after the tarball we also produce a deterministic ZIP of the
-            # signed binary (python3 zipfile, fixed timestamp 1980-01-01,
-            # deflate, unix attrs) and notarize + staple it.
-            # --staple implies --wait (rcodesign help notary-submit); the
-            # round-trip to Apple's Notary API can take minutes.
-            ZIP_PATH="$DIST_DIR/kindboard-${os}-${arch_display}.zip"
-            rm -f "$ZIP_PATH"
-            python3 - "$DIST_DIR/$target/kindboard" "$ZIP_PATH" <<'PYEOF'
-import sys, zipfile
-src, dst = sys.argv[1], sys.argv[2]
-with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zf:
-    zi = zipfile.ZipInfo("kindboard", (1980, 1, 1, 0, 0, 0))
-    zi.compress_type = zipfile.ZIP_DEFLATED
-    zi.create_system = 3
-    zi.external_attr = 0o755 << 16
-    with open(src, "rb") as f:
-        zf.writestr(zi, f.read())
-PYEOF
-            log "notarizing + stapling $ZIP_PATH (Developer ID; can take minutes)"
-            NOTARY_ERR="$(mktemp)"
-            # --api-key-path is the flag recommended by `rcodesign help
-            # notary-submit` (the options list spells it --api-key-file;
-            # both are accepted)
-            if "$RCODESIGN_BIN" notary-submit --staple --wait \
-                --api-key-path "$KINDBOARD_APPLE_API_KEY_PATH" \
-                "$ZIP_PATH" 2>"$NOTARY_ERR"; then
-                rm -f "$NOTARY_ERR"
-                log "notarized + stapled: $ZIP_PATH"
-            else
-                RESULTS["$target"]="FAILED: notarized (Developer ID) release mode: notary-submit failed: $(tr '\012' ' ' < "$NOTARY_ERR")"
-                rm -f "$NOTARY_ERR" "$ZIP_PATH" "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz"
+        if [[ "$os" == "windows" ]]; then
+            # Windows ships ONLY a deterministic zip (no tarball) and is NOT
+            # signed: SmartScreen / Mark-of-the-Web is neutralized at install
+            # time by scripts/install-windows.ps1 (Zone.Identifier removal),
+            # so this build performs no code signing for windows (ADR-0019).
+            if ! command -v python3 >/dev/null 2>&1; then
+                RESULTS["$target"]="FAILED: windows release zips require python3 (zipfile) — install python3"
                 BUILD_FAILURES=$((BUILD_FAILURES+1))
+                rm -f "$DIST_DIR/kindboard-${os}-${arch_display}.zip"
                 continue
+            fi
+            zip_deterministic "$DIST_DIR/$target/$BIN_NAME" \
+                "$DIST_DIR/kindboard-${os}-${arch_display}.zip" "$BIN_NAME"
+        else
+            GZIP=-n tar --owner=0 --group=0 --numeric-owner --mtime='@0' \
+                -C "$DIST_DIR/$target" -czf "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz" kindboard
+            if [[ "$os" == "darwin" ]] && (( NOTARIZE )); then
+                # Notarization mode: Apple notarizes ARCHIVES, not raw binaries,
+                # so after the tarball we also produce a deterministic ZIP of the
+                # signed binary (python3 zipfile via zip_deterministic, fixed
+                # timestamp 1980-01-01, deflate, unix attrs) and notarize + staple
+                # it.
+                # --staple implies --wait (rcodesign help notary-submit); the
+                # round-trip to Apple's Notary API can take minutes.
+                ZIP_PATH="$DIST_DIR/kindboard-${os}-${arch_display}.zip"
+                zip_deterministic "$DIST_DIR/$target/kindboard" "$ZIP_PATH" "kindboard"
+                log "notarizing + stapling $ZIP_PATH (Developer ID; can take minutes)"
+                NOTARY_ERR="$(mktemp)"
+                # --api-key-path is the flag recommended by `rcodesign help
+                # notary-submit` (the options list spells it --api-key-file;
+                # both are accepted)
+                if "$RCODESIGN_BIN" notary-submit --staple --wait \
+                    --api-key-path "$KINDBOARD_APPLE_API_KEY_PATH" \
+                    "$ZIP_PATH" 2>"$NOTARY_ERR"; then
+                    rm -f "$NOTARY_ERR"
+                    log "notarized + stapled: $ZIP_PATH"
+                else
+                    RESULTS["$target"]="FAILED: notarized (Developer ID) release mode: notary-submit failed: $(tr '\012' ' ' < "$NOTARY_ERR")"
+                    rm -f "$NOTARY_ERR" "$ZIP_PATH" "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz"
+                    BUILD_FAILURES=$((BUILD_FAILURES+1))
+                    continue
+                fi
             fi
         fi
         RESULTS["$target"]="OK"
         [[ "$target" == "$HOST_TARGET" ]] && HOST_OK=1
         [[ "$os" == "darwin" ]] && DARWIN_OK_COUNT=$((DARWIN_OK_COUNT+1))
+        [[ "$os" == "windows" ]] && WINDOWS_OK_COUNT=$((WINDOWS_OK_COUNT+1))
     else
         RESULTS["$target"]="FAILED: cargo build exited non-zero"
         BUILD_FAILURES=$((BUILD_FAILURES+1))
@@ -600,14 +650,15 @@ done
 log "== checksums =="
 shopt -s nullglob
 TARBALLS=("$DIST_DIR"/kindboard-*.tar.gz)
-if ((${#TARBALLS[@]})); then
-    # notarized release mode adds kindboard-*.zip artifacts; include them in
-    # SHA256SUMS when present (nullglob keeps the pattern harmless otherwise)
+ZIPS=("$DIST_DIR"/kindboard-*.zip)
+if ((${#TARBALLS[@]} + ${#ZIPS[@]})); then
+    # windows releases are zip-only, so zips alone must be enough to write
+    # SHA256SUMS; the glob covers both (nullglob keeps them harmless when absent)
     (cd "$DIST_DIR" && sha256sum kindboard-*.tar.gz kindboard-*.zip > SHA256SUMS)
     log "wrote $DIST_DIR/SHA256SUMS"
 else
     rm -f "$DIST_DIR/SHA256SUMS"
-    log "no tarballs produced; SHA256SUMS not written"
+    log "no artifacts produced; SHA256SUMS not written"
 fi
 
 log "== summary =="
@@ -622,6 +673,13 @@ if [[ "$KINDBOARD_REQUIRE_DARWIN" == "1" ]] \
     && (( DARWIN_REQUESTED_COUNT > 0 )) \
     && (( DARWIN_OK_COUNT != DARWIN_REQUESTED_COUNT )); then
     log "KINDBOARD_REQUIRE_DARWIN=1 and not all requested darwin targets built ($DARWIN_OK_COUNT/$DARWIN_REQUESTED_COUNT); exit 1"
+    exit 1
+fi
+
+if [[ "$KINDBOARD_REQUIRE_WINDOWS" == "1" ]] \
+    && (( WINDOWS_REQUESTED_COUNT > 0 )) \
+    && (( WINDOWS_OK_COUNT != WINDOWS_REQUESTED_COUNT )); then
+    log "KINDBOARD_REQUIRE_WINDOWS=1 and not all requested windows targets built ($WINDOWS_OK_COUNT/$WINDOWS_REQUESTED_COUNT); exit 1"
     exit 1
 fi
 

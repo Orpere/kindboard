@@ -1,6 +1,6 @@
 [package]
 name = "kindboard-core"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 license = "MIT"
 description = "UI-free orchestration library for kindboard: kind cluster lifecycle, provisioning, topology and persistence"
@@ -23,5 +23,9 @@ log = "0.4"
 dirs = "7"
 url = "2"
 chrono = { version = "0.4", features = ["serde"] }
-nix = { version = "0.31", features = ["signal", "process"] }
 secrecy = "0.10"
+
+# Unix-only: process groups / killpg / waitpid (nix has no Windows support;
+# ADR-0019).
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", features = ["signal", "process"] }

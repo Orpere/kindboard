@@ -41,6 +41,24 @@ All four platform variants (linux/darwin × amd64/arm64) are pinned. A digest mi
 | kubectx | `kubectx` | `--version` | formula `kubectx` | — | — | AUR `kubectx` | `github.com/ahmetb/kubectx/releases/download/v<ver>/kubectx_v<ver>_{linux,darwin}_{x86_64,arm64}.tar.gz` |
 | kustomize | `kustomize version` | *(embedded)* | formula `kustomize` | `kustomize` | — | `kustomize` (community) | `github.com/kubernetes-sigs/kustomize/releases/download/kustomize/v<ver>/kustomize_v<ver>_{linux,darwin}_{amd64,arm64}.tar.gz` |
 
+## Windows (ADR-0019)
+
+Resolution order on Windows: **winget → choco → binary fallback** into
+`%USERPROFILE%\.local\bin` (digests pinned as `windows-amd64` sha256, same
+verification discipline). The binary fallback uses the bundled `curl.exe` +
+`tar.exe` (Windows 10 1803+) and PowerShell one-liners — no chmod.
+
+| Tool | winget id | choco pkg | Windows notes |
+|---|---|---|---|
+| docker | `Docker.DockerDesktop` | `docker-desktop` | Docker Desktop only (Linux containers); the UAC prompt belongs to Docker Desktop's installer, never kindboard |
+| kind | `Kubernetes.kind` | `kind` | |
+| kubectl | `Kubernetes.kubectl` | `kubernetes-cli` | |
+| helm | `Helm.Helm` | `kubernetes-helm` | |
+| cilium CLI | `Cilium.CiliumCLI` | `cilium-cli` | |
+| k9s | `Derailed.k9s` | `k9s` | |
+| kubectx | — | — | **unsupported on Windows** (shell scripts) — the app reports an honest error instead of an install plan |
+| kustomize | `Kubernetes.kustomize` | `kustomize` | |
+
 **Version parse results (how the app reads the detect output):**
 
 - `docker`: `29.8.0` (bare semver).

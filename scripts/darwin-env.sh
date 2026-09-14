@@ -43,3 +43,23 @@ MACOSX_SDK_FALLBACK_URL="https://github.com/joseluisq/macosx-sdks/releases/downl
 MACOSX_SDK_FALLBACK_DIGEST="c15cf0f3f17d714d1aa5a642da8e118db53d79429eb015771ba816aa7c6c1cbd"
 
 MACOSX_SDK_CACHE_DIR="${KINDBOARD_MACOSX_SDK_CACHE_DIR:-$HOME/.local/share/kindboard/sdk}"
+
+# osxcross_wrapper <arch> <suffix>: print the matching osxcross wrapper path
+# (e.g. osxcross_wrapper aarch64 -clang) or nothing. The cmake-clang wrapper is
+# ignored — the plain clang wrapper is the cargo linker/CC.
+osxcross_wrapper() {
+    local arch=$1 suffix=$2 c
+    for c in "$OSXCROSS_DIR"/bin/${arch}-apple-darwin*${suffix}; do
+        [[ -e "$c" ]] || continue
+        [[ "${c##*/}" == *cmake* ]] && continue
+        printf '%s\n' "$c"
+        return 0
+    done
+    return 1
+}
+
+# osxcross_ready: both darwin arch clang wrappers exist.
+osxcross_ready() {
+    [[ -n "$(osxcross_wrapper x86_64 -clang)" ]] \
+        && [[ -n "$(osxcross_wrapper aarch64 -clang)" ]]
+}

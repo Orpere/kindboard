@@ -1,5 +1,10 @@
 //! kindboard binary: minimal CLI handling (--version/--help), window icon
 //! loading, worker-thread startup, eframe bootstrap and shutdown.
+//!
+//! Release builds on Windows are GUI-subsystem binaries (no console window
+//! pops); debug builds keep the console for logs (ADR-0019).
+
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::Arc;
 
@@ -311,6 +316,41 @@ fn detach_self(args: &[String]) -> std::io::Result<std::process::Child> {
     build_detach_command(args).spawn()
 }
 
+/// Win32 `CREATE_NO_WINDOW` (WinBase.h, 0x08000000): the re-exec'd child runs
+/// without a console window. std removed its pre-defined constant, so the
+/// value is pinned here.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Build (but do NOT spawn) the Windows re-exec command for `--detach`:
+/// current executable, `--detach` stripped from argv, `KINDBOARD_DETACHED=1`,
+/// stdio nulled, and `CREATE_NO_WINDOW` so the re-exec'd GUI never flashes a
+/// console. Windows has no session concept — the child is an ordinary
+/// detached-window process.
+#[cfg(windows)]
+fn build_detach_command(args: &[String]) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    let mut cmd = std::process::Command::new(std::env::current_exe().expect("current_exe"));
+    cmd.args(
+        args.iter()
+            .filter(|arg| arg.as_str() != "--detach")
+            .map(String::as_str),
+    );
+    cmd.env("KINDBOARD_DETACHED", "1");
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::null());
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+/// Spawn the detach re-exec (windows-only; `CREATE_NO_WINDOW` keeps the
+/// child console-less).
+#[cfg(windows)]
+fn detach_self(args: &[String]) -> std::io::Result<std::process::Child> {
+    build_detach_command(args).spawn()
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--version" || arg == "-V") {
@@ -380,9 +420,11 @@ fn main() {
     let _ = log::set_logger(Box::leak(logger));
     log::set_max_level(level_for(troubleshoot.verbose));
 
-    // --detach: re-exec the GUI in a new session, then exit 0. The child
-    // (KINDBOARD_DETACHED=1, --detach stripped from argv) never re-detaches.
-    #[cfg(unix)]
+    // --detach: re-exec the GUI in a new session (unix: setsid + nulled
+    // stdio; windows: CREATE_NO_WINDOW + nulled stdio), then exit 0. The
+    // child (KINDBOARD_DETACHED=1, --detach stripped from argv) never
+    // re-detaches.
+    #[cfg(any(unix, windows))]
     if troubleshoot.detach && std::env::var_os("KINDBOARD_DETACHED").is_none() {
         let child = match detach_self(&args) {
             Ok(child) => child,
@@ -400,11 +442,6 @@ fn main() {
             println!("logs: {}", path.display());
         }
         return;
-    }
-    #[cfg(not(unix))]
-    if troubleshoot.detach {
-        eprintln!("kindboard: --detach is not supported on this platform");
-        std::process::exit(2);
     }
 
     // Buses: UI ↔ core worker.

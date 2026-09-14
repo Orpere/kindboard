@@ -46,6 +46,11 @@ fn docker() -> Tool {
             dnf: Some("moby-engine"),
             apt: Some("docker.io"),
             pacman: Some("docker"),
+            // Verified 2026-09-14 against microsoft/winget-pkgs and the
+            // chocolatey.org feed (community package ids).
+            winget: Some("Docker.DockerDesktop"),
+            choco: Some("docker-desktop"),
+            windows_unsupported: false,
             binary: None,
             pkg_manager_only: true,
             post_install: Some(
@@ -71,9 +76,14 @@ fn kind() -> Tool {
             dnf: Some("kind"),
             apt: None,
             pacman: None,
+            winget: Some("Kubernetes.kind"),
+            choco: Some("kind"),
+            windows_unsupported: false,
             binary: Some(BinaryDownload {
                 url_template: "https://kind.sigs.k8s.io/dl/v0.33.0/kind-{os}-{arch}",
+                windows_url_template: None,
                 members: &[],
+                windows_members: &[],
                 // Official digests: https://kind.sigs.k8s.io/dl/v0.33.0/kind-<os>-<arch>.sha256sum
                 sha256: &[
                     (
@@ -91,6 +101,12 @@ fn kind() -> Tool {
                     (
                         "darwin-arm64",
                         "0c8c7dbe5e23594a198b786c4bc13dacc101fa6196b0cb0b23a1ca44e61f4b4f",
+                    ),
+                    // kind-windows-amd64 (fetched 2026-09-14 from
+                    // https://kind.sigs.k8s.io/dl/v0.33.0/kind-windows-amd64.sha256sum).
+                    (
+                        "windows-amd64",
+                        "4b22adaa135368c5a465d56bbd8e520cbea87272a06ca00b6078e7b81515c9fc",
                     ),
                 ],
             }),
@@ -115,9 +131,16 @@ fn kubectl() -> Tool {
             dnf: None,
             apt: Some("kubectl"),
             pacman: Some("kubectl"),
+            winget: Some("Kubernetes.kubectl"),
+            choco: Some("kubernetes-cli"),
+            windows_unsupported: false,
             binary: Some(BinaryDownload {
                 url_template: "https://dl.k8s.io/release/v1.37.0/bin/{os}/{arch}/kubectl",
+                windows_url_template: Some(
+                    "https://dl.k8s.io/release/v1.37.0/bin/{os}/{arch}/kubectl.exe",
+                ),
                 members: &[],
+                windows_members: &[],
                 // Official digests: https://dl.k8s.io/release/v1.37.0/bin/<os>/<arch>/kubectl.sha256
                 sha256: &[
                     (
@@ -135,6 +158,12 @@ fn kubectl() -> Tool {
                     (
                         "darwin-arm64",
                         "583beedaebe422e71d3f1a96acef8b1fef86ea2f09a45ad01aa6c9ce287c1380",
+                    ),
+                    // kubectl.exe (fetched 2026-09-14 from
+                    // https://dl.k8s.io/release/v1.37.0/bin/windows/amd64/kubectl.exe.sha256).
+                    (
+                        "windows-amd64",
+                        "4721b614a67bb4932a0369e61f4a323d8c6ca00943d3a2ff14837c124da06f0e",
                     ),
                 ],
             }),
@@ -159,9 +188,14 @@ fn helm() -> Tool {
             dnf: Some("helm"),
             apt: Some("helm"),
             pacman: Some("helm"),
+            winget: Some("Helm.Helm"),
+            choco: Some("kubernetes-helm"),
+            windows_unsupported: false,
             binary: Some(BinaryDownload {
                 url_template: "https://get.helm.sh/helm-v4.2.2-{os}-{arch}.tar.gz",
+                windows_url_template: Some("https://get.helm.sh/helm-v4.2.2-{os}-{arch}.zip"),
                 members: &["{os}-{arch}/helm"],
+                windows_members: &["{os}-{arch}/helm.exe"],
                 // Official digests: https://get.helm.sh/helm-v4.2.2-<os>-<arch>.tar.gz.sha256sum
                 sha256: &[
                     (
@@ -179,6 +213,12 @@ fn helm() -> Tool {
                     (
                         "darwin-arm64",
                         "5410a0dae3d5d91f45653b161260d9301aabc4ae80ae50a6605d66884b6df8ea",
+                    ),
+                    // helm-v4.2.2-windows-amd64.zip (fetched 2026-09-14 from
+                    // https://get.helm.sh/helm-v4.2.2-windows-amd64.zip.sha256sum).
+                    (
+                        "windows-amd64",
+                        "5fad8562e98c34fa5af3ef904086a5874a6701050f9bf36e30238c975df94dcd",
                     ),
                 ],
             }),
@@ -203,9 +243,16 @@ fn cilium() -> Tool {
             dnf: None,
             apt: None,
             pacman: None,
+            winget: Some("Cilium.CiliumCLI"),
+            choco: Some("cilium-cli"),
+            windows_unsupported: false,
             binary: Some(BinaryDownload {
                 url_template: "https://github.com/cilium/cilium-cli/releases/download/v0.20.0/cilium-{os}-{arch}.tar.gz",
+                windows_url_template: Some(
+                    "https://github.com/cilium/cilium-cli/releases/download/v0.20.0/cilium-{os}-{arch}.zip",
+                ),
                 members: &["cilium"],
+                windows_members: &["cilium.exe"],
                 // Official digests: GitHub release .sha256sum assets (cilium-cli v0.20.0).
                 sha256: &[
                     (
@@ -223,6 +270,12 @@ fn cilium() -> Tool {
                     (
                         "darwin-arm64",
                         "2850449e321c21e9556c312d0b6885838523d294b7e0b58955697507463a57cc",
+                    ),
+                    // cilium-windows-amd64.zip (fetched 2026-09-14 from the
+                    // v0.20.0 release asset cilium-windows-amd64.zip.sha256sum).
+                    (
+                        "windows-amd64",
+                        "d96cf9811608cf945326196ccf4dd251ba91358ead3587f52023680e4460ba19",
                     ),
                 ],
             }),
@@ -247,9 +300,16 @@ fn k9s() -> Tool {
             dnf: Some("k9s"),
             apt: None,
             pacman: Some("k9s"),
+            winget: Some("Derailed.k9s"),
+            choco: Some("k9s"),
+            windows_unsupported: false,
             binary: Some(BinaryDownload {
                 url_template: "https://github.com/derailed/k9s/releases/download/v0.51.0/k9s_{OS}_{arch}.tar.gz",
+                windows_url_template: Some(
+                    "https://github.com/derailed/k9s/releases/download/v0.51.0/k9s_{OS}_{arch}.zip",
+                ),
                 members: &["k9s"],
+                windows_members: &["k9s.exe"],
                 // Official digests: GitHub release asset checksums.sha256 (k9s v0.51.0).
                 sha256: &[
                     (
@@ -267,6 +327,12 @@ fn k9s() -> Tool {
                     (
                         "darwin-arm64",
                         "9b8c0e8f461e5d33aeee43a67f5ef4aff646a008a786887b8266cbb153c610cc",
+                    ),
+                    // k9s_Windows_amd64.zip (fetched 2026-09-14 from the
+                    // v0.51.0 release asset checksums.sha256).
+                    (
+                        "windows-amd64",
+                        "bba299f1877913979831543a008f2e104995d2ea4ac8f23d7f49c0444857d973",
                     ),
                 ],
             }),
@@ -291,11 +357,17 @@ fn kubectx() -> Tool {
             dnf: None,
             apt: None,
             pacman: None,
+            winget: None,
+            choco: None,
+            // kubectx is a POSIX shell script — no Windows distribution.
+            windows_unsupported: true,
             binary: Some(BinaryDownload {
                 url_template: "https://github.com/ahmetb/kubectx/releases/download/v0.11.0/kubectx_v0.11.0_{os}_{x64}.tar.gz",
+                windows_url_template: None,
                 // The kubectx archive contains only the kubectx binary; kubens
                 // ships in a separate upstream archive and is not installed.
                 members: &["kubectx"],
+                windows_members: &[],
                 // Official digests: GitHub release asset checksums.txt (kubectx v0.11.0).
                 sha256: &[
                     (
@@ -337,9 +409,16 @@ fn kustomize() -> Tool {
             dnf: Some("kustomize"),
             apt: None,
             pacman: Some("kustomize"),
+            winget: Some("Kubernetes.kustomize"),
+            choco: Some("kustomize"),
+            windows_unsupported: false,
             binary: Some(BinaryDownload {
                 url_template: "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/v5.8.1/kustomize_v5.8.1_{os}_{arch}.tar.gz",
+                windows_url_template: Some(
+                    "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/v5.8.1/kustomize_v5.8.1_{os}_{arch}.zip",
+                ),
                 members: &["kustomize"],
+                windows_members: &["kustomize.exe"],
                 // Official digests: GitHub release asset checksums.txt (kustomize v5.8.1).
                 sha256: &[
                     (
@@ -357,6 +436,12 @@ fn kustomize() -> Tool {
                     (
                         "darwin-arm64",
                         "8886f8a78474e608cc81234f729fda188a9767da23e28925802f00ece2bab288",
+                    ),
+                    // kustomize_v5.8.1_windows_amd64.zip (fetched 2026-09-14
+                    // from the v5.8.1 release asset checksums.txt).
+                    (
+                        "windows-amd64",
+                        "8ec7f5e815e526d4622c06df0a7793d8cfb6eb1c74f816b46166097fef8b26c6",
                     ),
                 ],
             }),

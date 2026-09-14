@@ -350,21 +350,8 @@ fi
 # 7. osxcross toolchain (Linux only)
 # ---------------------------------------------------------------------------
 
-osxcross_wrapper() {
-    local arch=$1 suffix=$2 c
-    for c in "$OSXCROSS_DIR"/bin/${arch}-apple-darwin*${suffix}; do
-        [[ -e "$c" ]] || continue
-        [[ "${c##*/}" == *cmake* ]] && continue
-        printf '%s\n' "$c"
-        return 0
-    done
-    return 1
-}
-
-osxcross_ready() {
-    [[ -n "$(osxcross_wrapper x86_64 -clang)" ]] \
-        && [[ -n "$(osxcross_wrapper aarch64 -clang)" ]]
-}
+# osxcross_wrapper / osxcross_ready are sourced from scripts/darwin-env.sh
+# (shared with build.sh and check-targets.sh).
 
 sdk_cached_ok() {
     local sdk_path="$MACOSX_SDK_CACHE_DIR/$MACOSX_SDK_NAME"
