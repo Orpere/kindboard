@@ -130,6 +130,7 @@ if [[ "$PLATFORM" == "darwin" ]]; then
         report "Xcode CLT" "MISSING" "run: xcode-select --install"
     else
         log "Xcode Command Line Tools required (opens the GUI installer dialog)"
+        log 'no Xcode? skip building entirely: `make mac-run` fetches the prebuilt signed binary (no CLT needed)'
         if [[ "${KINDBOARD_BOOTSTRAP_YES:-0}" == "1" ]] \
             || { command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; }; then
             xcode-select --install
@@ -137,6 +138,7 @@ if [[ "$PLATFORM" == "darwin" ]]; then
             exit 1
         elif [[ -t 0 && -t 1 ]]; then
             printf 'bootstrap-darwin: run: xcode-select --install\n'
+            printf 'bootstrap-darwin: no Xcode? skip building entirely: `make mac-run` fetches the prebuilt signed binary (no CLT needed)\n'
             printf 'bootstrap-darwin: run it now? [y/N] '
             read -r ans
             [[ "$ans" == "y" || "$ans" == "Y" ]] \
@@ -147,6 +149,7 @@ if [[ "$PLATFORM" == "darwin" ]]; then
         else
             echo "bootstrap-darwin: ERROR: Xcode Command Line Tools missing and no way to install them (non-interactive; set KINDBOARD_BOOTSTRAP_YES=1 to auto-install)" >&2
             echo "bootstrap-darwin: run: xcode-select --install" >&2
+            echo "bootstrap-darwin: no Xcode? skip building entirely: \`make mac-run\` fetches the prebuilt signed binary (no CLT needed)" >&2
             exit 1
         fi
     fi

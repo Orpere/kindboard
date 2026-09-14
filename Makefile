@@ -32,7 +32,7 @@ VERSION := $(shell grep -m1 '^version' crates/kindboard-app/Cargo.toml | cut -d'
 UNAME_S := $(shell uname -s)
 PAGES_DIR := /tmp/kindboard-pages
 
-.PHONY: help all build build-all dist-macos darwin-bootstrap run mac-app fmt fmt-check clippy test e2e audit check assets dist clean version release publish
+.PHONY: help all build build-all dist-macos darwin-bootstrap run mac-app mac-install mac-run fmt fmt-check clippy test e2e audit check assets dist clean version release publish
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -52,7 +52,8 @@ dist-macos: darwin-bootstrap ## Cross-build darwin release assets (KINDBOARD_REQ
 	KINDBOARD_REQUIRE_DARWIN=1 ./scripts/build.sh aarch64-apple-darwin x86_64-apple-darwin
 
 # On macOS, `make run` needs Xcode CLT + a recent rustc (macOS 26 SDK) — make
-# darwin-bootstrap verifies and guides both before the app builds.
+# darwin-bootstrap verifies and guides both before the app builds. No Xcode at
+# all? `make mac-run` installs the prebuilt signed binary instead (no build).
 ifeq ($(UNAME_S),Darwin)
 run: darwin-bootstrap
 endif
@@ -61,6 +62,12 @@ run: ## Run the desktop app (debug build)
 
 mac-app: ## Build and open a double-clickable kindboard.app (macOS; locally built, zero Gatekeeper prompts)
 	./scripts/make-mac-app.sh
+
+mac-install: ## (macOS) install the prebuilt signed kindboard from GitHub releases — no Xcode, no Gatekeeper prompts, no Apple account
+	./scripts/install-macos.sh
+
+mac-run: ## (macOS) install (if needed) and launch kindboard — the zero-toolchain way to run
+	./scripts/install-macos.sh --run
 
 fmt: ## Format all code
 	cargo fmt --all

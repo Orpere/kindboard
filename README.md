@@ -115,6 +115,11 @@ double-clickable app, and Developer ID + notarization for releases — see
 macOS from source: install Xcode Command Line Tools once (`xcode-select
 --install`) — `make darwin-bootstrap` verifies and guides you.
 
+**Zero-toolchain run:** `make mac-run` (or `make mac-install`) — installs the
+prebuilt signed binary from GitHub releases, verifies its checksum, and clears
+the download quarantine flag: no Xcode tools, no Gatekeeper prompt, no Apple
+account.
+
 **From source** (Rust 1.98+):
 
 ```bash
@@ -176,6 +181,8 @@ watch errors). Detached runs always write to a log file, so
 |---|---|
 | `make run` | Run the desktop app (debug) — on macOS this runs `darwin-bootstrap` first (Xcode CLT + rustc ≥ 1.98) |
 | `make mac-app` | macOS only: build + open a double-clickable `dist/kindboard.app` (locally built → zero Gatekeeper prompts; see docs/macos-distribution.md) |
+| `make mac-install` | macOS: install the prebuilt signed kindboard from GitHub releases — no Xcode, no Gatekeeper prompts, no Apple account |
+| `make mac-run` | macOS: install (if needed) and launch kindboard — the zero-toolchain way to run |
 | `make check` | All quality gates: `fmt --check`, `clippy -D warnings`, tests |
 | `make test` | Unit + integration tests (e2e skipped unless `KINDBOARD_E2E=1`) |
 | `make e2e` | Full suite including real-kind e2e (requires docker + kind; throwaway `kbtest-*` clusters). Covers cluster create/delete, kubeconfig merge, topology, and the CNI matrix (flannel/calico/cilium full installs) |
