@@ -268,8 +268,10 @@ pub struct Settings {
     /// Default k8s version for the create wizard.
     pub default_k8s_version: Option<String>,
     /// Remember the last wizard values (CNI, ingress, ports, …).
+    #[serde(default = "default_remember_last_wizard")]
     pub remember_last_wizard: bool,
     /// Reconciliation poll interval in seconds.
+    #[serde(default = "default_poll_interval_secs")]
     pub poll_interval_secs: u64,
     /// Active theme id ("dark" | "light" | "high-contrast"). `None` =
     /// default (dark). Introduced in 0.1.3 — older files deserialize to
@@ -279,6 +281,14 @@ pub struct Settings {
     /// Extra fields, preserved on save.
     #[serde(flatten)]
     pub other: serde_json::Map<String, serde_json::Value>,
+}
+
+fn default_remember_last_wizard() -> bool {
+    true
+}
+
+fn default_poll_interval_secs() -> u64 {
+    DEFAULT_POLL_INTERVAL_SECS
 }
 
 impl Default for Settings {
@@ -485,6 +495,26 @@ mod tests {
         let json = serde_json::to_vec_pretty(&Settings::default()).unwrap();
         let text = String::from_utf8(json).unwrap();
         assert!(!text.contains("theme"), "None theme must not be serialized");
+    }
+
+    #[test]
+    fn partial_settings_file_loads_with_defaults_for_missing_fields() {
+        // README-documented minimal file `{"theme":"light"}` must load:
+        // missing non-optional fields fall back to their documented
+        // defaults instead of failing the whole parse (which silently
+        // discarded the theme).
+        let dir = TempDir::new("settings-partial");
+        let data = DataDir::new(dir.path.clone()).unwrap();
+        std::fs::write(data.settings_path(), r#"{"theme":"light"}"#).unwrap();
+
+        let loaded = data.load_settings().unwrap();
+        assert_eq!(loaded.theme.as_deref(), Some("light"));
+        assert!(loaded.remember_last_wizard, "bool default must be true");
+        assert_eq!(
+            loaded.poll_interval_secs,
+            crate::state::DEFAULT_POLL_INTERVAL_SECS
+        );
+        assert_eq!(loaded.default_k8s_version.as_deref(), None);
     }
 
     #[test]

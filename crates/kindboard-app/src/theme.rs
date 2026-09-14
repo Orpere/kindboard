@@ -314,16 +314,29 @@ fn apply_theme(ctx: &egui::Context, id: ThemeId) {
     visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, pal.on_accent);
     visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, pal.on_accent);
     visuals.extreme_bg_color = pal.extreme_bg;
-    ctx.set_visuals(visuals);
 
     // Identical Style in every theme — the design language does not change.
     let mut style: Style = (*ctx.global_style()).clone();
+    style.visuals = visuals;
     style.spacing.item_spacing = egui::vec2(8.0, 8.0);
     style.spacing.button_padding = egui::vec2(10.0, 5.0);
     style.spacing.interact_size.y = 26.0;
     style.spacing.window_margin = Margin::same(14);
     style.spacing.scroll = egui::style::ScrollStyle::solid();
-    ctx.set_global_style(style);
+
+    // Cross-platform fix (ADR-0020): `Context::set_visuals`/`set_global_style`
+    // mutate only the *currently active* egui theme style, and
+    // `theme_preference` defaults to `System`. On Windows and macOS winit
+    // reports the OS theme (Light on most machines), so egui renders its
+    // untouched default light style — the kindboard palette appeared to not
+    // work there, while Fedora (dark OS theme or no theme reported) looked
+    // correct. Writing the visuals + style (as one unit, so the style cannot
+    // clobber the palette) to BOTH egui themes makes rendering identical on
+    // every platform, regardless of the OS theme, including when it changes
+    // at runtime.
+    for theme in [egui::Theme::Dark, egui::Theme::Light] {
+        ctx.set_style_of(theme, style.clone());
+    }
 }
 
 #[cfg(test)]
@@ -416,5 +429,67 @@ mod tests {
             ..kindboard_core::Settings::default()
         };
         assert_eq!(theme_from_settings(Some(&settings)), ThemeId::Dark);
+    }
+
+    // Regression (ADR-0020): on Windows/macOS winit reports the OS theme and
+    // `theme_preference` defaults to `System`, so egui can render the *other*
+    // (untouched) theme style. `apply` must write the palette + spacing to
+    // BOTH egui theme styles so the UI is identical on every platform.
+
+    /// Serialize tests that mutate the process-global `CURRENT` index — the
+    /// test harness runs tests on parallel threads, and an unsynchronized
+    /// `set_index` in one test would race the `current()` reads in another.
+    static THEME_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn apply_writes_palette_and_spacing_to_both_egui_themes() {
+        let _guard = THEME_TEST_LOCK.lock().unwrap();
+        let ctx = egui::Context::default();
+        set_index(ThemeId::Dark);
+        apply(&ctx);
+
+        let dark_pal = ThemeId::Dark.palette();
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            let visuals = &ctx.style_of(theme).visuals;
+            assert_eq!(
+                visuals.panel_fill, dark_pal.bg,
+                "panel_fill mismatch for {theme:?}"
+            );
+            assert_eq!(visuals.window_fill, dark_pal.bg_raised);
+            assert_eq!(visuals.extreme_bg_color, dark_pal.extreme_bg);
+            assert_eq!(
+                ctx.style_of(theme).spacing.item_spacing,
+                egui::vec2(8.0, 8.0),
+                "spacing mismatch for {theme:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn set_theme_reapplies_both_egui_themes() {
+        let _guard = THEME_TEST_LOCK.lock().unwrap();
+        let ctx = egui::Context::default();
+        set_index(ThemeId::Dark);
+        apply(&ctx);
+
+        // Swap to HighContrast via the real UI path.
+        set_theme(&ctx, ThemeId::HighContrast);
+        assert_eq!(current(), ThemeId::HighContrast);
+
+        let hc_pal = ThemeId::HighContrast.palette();
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            let visuals = &ctx.style_of(theme).visuals;
+            assert_eq!(
+                visuals.panel_fill, hc_pal.bg,
+                "panel_fill mismatch for {theme:?} after set_theme"
+            );
+        }
+
+        // And back to Light.
+        set_theme(&ctx, ThemeId::Light);
+        let light_pal = ThemeId::Light.palette();
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            assert_eq!(ctx.style_of(theme).visuals.panel_fill, light_pal.bg);
+        }
     }
 }
