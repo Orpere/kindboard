@@ -110,6 +110,9 @@ macOS first run: darwin binaries are ad-hoc signed with a pure-Rust toolchain
 right-click the binary → Open, or run `xattr -d com.apple.quarantine
 ./kindboard` once.
 
+macOS from source: install Xcode Command Line Tools once (`xcode-select
+--install`) — `make darwin-bootstrap` verifies and guides you.
+
 **From source** (Rust 1.98+):
 
 ```bash

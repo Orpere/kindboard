@@ -13,25 +13,32 @@
 #
 # Steps, in order:
 #   1. platform detection: Linux (dnf or apt) or native macOS
-#   2. host packages (Linux only; Fedora/apt lists below) — verified with
+#   2. Xcode Command Line Tools (macOS only) — `xcode-select -p` + a real C
+#      compile probe; missing CLT is resolved with `xcode-select --install`
+#      under the same install policy as host packages (below; never hangs
+#      automation, exit 1 until the GUI installer dialog is completed)
+#   3. host packages (Linux only; Fedora/apt lists below) — verified with
 #      `rpm -q --whatprovides` / `dpkg -s`, installed with sudo only when
 #      something is missing. Install policy: KINDBOARD_BOOTSTRAP_YES=1 or
 #      passwordless `sudo -n true` -> install silently; interactive tty ->
 #      print the exact command + y/N prompt; otherwise print the exact
 #      command and exit 1 (never hangs automation).
-#   3. rustup targets aarch64-apple-darwin + x86_64-apple-darwin (Linux only)
-#   4. rcodesign (cargo install apple-codesign --locked; honours
+#   4. rustup targets — Linux: aarch64-apple-darwin + x86_64-apple-darwin;
+#      macOS: the other darwin arch (the native rustc host is already
+#      usable), so a Mac can cross-build both darwin arches
+#   5. rcodesign (cargo install apple-codesign --locked; honours
 #      KINDBOARD_RCODESIGN when set and executable)
-#   5. osxcross toolchain (Linux only): clone ~/.local/src/osxcross at the
+#   6. osxcross toolchain (Linux only): clone ~/.local/src/osxcross at the
 #      pinned commit OSXCROSS_PIN (darwin-env.sh), fetch the digest-pinned SDK
 #      into the cache dir, and UNATTENDED=1 ./build.sh into OSXCROSS_DIR. A
 #      digest mismatch is a hard error — the fallback SDK pin is never used
 #      automatically (see docs/adrs/ADR-0017.md).
-#   6. status table, one line per dependency; exit 0 only when all resolved
+#   7. status table, one line per dependency; exit 0 only when all resolved
 #
 # All pins come from ../scripts/darwin-env.sh (single source of truth, shared
-# with build.sh). Everything installs into $HOME except host packages, which
-# are the only step that may need sudo. Log prefix: `bootstrap-darwin:`.
+# with build.sh). Everything installs into $HOME except host packages and the
+# Xcode CLT installer (system-level; the only steps that may need credentials).
+# Log prefix: `bootstrap-darwin:`.
 
 set -euo pipefail
 
@@ -91,14 +98,59 @@ case "$HOST_OS" in
 esac
 
 if [[ "$PLATFORM" == "darwin" ]]; then
-    log "native macOS host: skipping host-package and osxcross steps (darwin builds natively)"
+    log "native macOS host: verifying Xcode CLT + rustup targets; skipping host-package and osxcross steps (darwin builds natively)"
 else
     log "platform: Linux ($PLATFORM)"
     [[ "$CHECK_ONLY" == "1" ]] && log "check mode: verifying only, nothing will be installed"
 fi
 
 # ---------------------------------------------------------------------------
-# 2. Host packages (Linux only)
+# 2. Xcode Command Line Tools (native macOS only)
+# ---------------------------------------------------------------------------
+
+if [[ "$PLATFORM" == "darwin" ]]; then
+    clt_ok() {
+        # working CLT = valid developer dir + a working C compiler
+        local dev tmp probe_rc=0
+        dev="$(xcode-select -p 2>/dev/null || true)"
+        [[ -n "$dev" && -d "$dev" ]] || return 1
+        tmp="$(mktemp -d)" || return 1
+        printf 'int main(void){return 0;}\n' > "$tmp/probe.c"
+        (cd "$tmp" && "${CC:-cc}" probe.c -o probe) >/dev/null 2>&1 || probe_rc=1
+        rm -rf "$tmp"
+        return "$probe_rc"
+    }
+
+    if clt_ok; then
+        report "Xcode CLT" "OK" "$("${CC:-cc}" --version 2>/dev/null | head -n1 || true)"
+    elif [[ "$CHECK_ONLY" == "1" ]]; then
+        report "Xcode CLT" "MISSING" "run: xcode-select --install"
+    else
+        log "Xcode Command Line Tools required (opens the GUI installer dialog)"
+        if [[ "${KINDBOARD_BOOTSTRAP_YES:-0}" == "1" ]] \
+            || { command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; }; then
+            xcode-select --install
+            echo "bootstrap-darwin: complete the Command Line Tools installation dialog, then re-run ./scripts/bootstrap-darwin.sh" >&2
+            exit 1
+        elif [[ -t 0 && -t 1 ]]; then
+            printf 'bootstrap-darwin: run: xcode-select --install\n'
+            printf 'bootstrap-darwin: run it now? [y/N] '
+            read -r ans
+            [[ "$ans" == "y" || "$ans" == "Y" ]] \
+                || { log "aborted: re-run after installing Xcode Command Line Tools"; exit 1; }
+            xcode-select --install
+            echo "bootstrap-darwin: complete the Command Line Tools installation dialog, then re-run ./scripts/bootstrap-darwin.sh" >&2
+            exit 1
+        else
+            echo "bootstrap-darwin: ERROR: Xcode Command Line Tools missing and no way to install them (non-interactive; set KINDBOARD_BOOTSTRAP_YES=1 to auto-install)" >&2
+            echo "bootstrap-darwin: run: xcode-select --install" >&2
+            exit 1
+        fi
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Host packages (Linux only)
 # ---------------------------------------------------------------------------
 
 if [[ "$PLATFORM" == "dnf" || "$PLATFORM" == "apt" ]]; then
@@ -162,11 +214,40 @@ if [[ "$PLATFORM" == "dnf" || "$PLATFORM" == "apt" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 3. rustup darwin targets
+# 4. rustup darwin targets
 # ---------------------------------------------------------------------------
 
 if [[ "$PLATFORM" == "darwin" ]]; then
-    report "rustup targets" "n/a" "native macOS host"
+    NATIVE_HOST="$(rustc -vV 2>/dev/null | sed -n 's/^host: //p' || true)"
+    OTHER=""
+    if [[ "$NATIVE_HOST" == "aarch64-apple-darwin" ]]; then
+        OTHER="x86_64-apple-darwin"
+    elif [[ "$NATIVE_HOST" == "x86_64-apple-darwin" ]]; then
+        OTHER="aarch64-apple-darwin"
+    fi
+    if [[ -z "$NATIVE_HOST" ]]; then
+        report "rustup targets" "MISSING" "rustup not found — install Rust via https://rustup.rs"
+    elif [[ -z "$OTHER" ]]; then
+        report "rustup targets" "MISSING" "unsupported rustc host '$NATIVE_HOST' — expected an apple-darwin host"
+    elif ! command -v rustup >/dev/null 2>&1; then
+        report "rustup targets" "MISSING" "rustup not found — install Rust via https://rustup.rs (needed to add target $OTHER)"
+    elif [[ "$CHECK_ONLY" == "1" ]]; then
+        if rustup target list --installed 2>/dev/null | grep -qxF "$OTHER"; then
+            report "rustup targets" "OK" "native $NATIVE_HOST + $OTHER installed"
+        else
+            report "rustup targets" "MISSING" "run: rustup target add $OTHER"
+        fi
+    else
+        if ! rustup target list --installed 2>/dev/null | grep -qxF "$OTHER"; then
+            log "ensuring rustup target for the non-native darwin arch"
+            rustup target add "$OTHER"
+        fi
+        if rustup target list --installed 2>/dev/null | grep -qxF "$OTHER"; then
+            report "rustup targets" "OK" "native $NATIVE_HOST + $OTHER installed"
+        else
+            report "rustup targets" "MISSING" "rustup target add $OTHER did not install the target — re-run or add manually"
+        fi
+    fi
 else
     if ! command -v rustup >/dev/null 2>&1; then
         report "rustup targets" "MISSING" "rustup not found — install Rust via https://rustup.rs"
@@ -189,7 +270,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. rcodesign
+# 5. rcodesign
 # ---------------------------------------------------------------------------
 
 rcodesign_present() {
@@ -220,7 +301,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 5. osxcross toolchain (Linux only)
+# 6. osxcross toolchain (Linux only)
 # ---------------------------------------------------------------------------
 
 osxcross_wrapper() {
@@ -331,7 +412,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Status table
+# 7. Status table
 # ---------------------------------------------------------------------------
 
 log "== status =="

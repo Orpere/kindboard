@@ -29,7 +29,9 @@
 #     on the build host — missing rcodesign FAILS any darwin target that is
 #     built, it is not skippable (targets skipped for lack of osxcross never
 #     reach the signing step)
-#   - darwin targets on macOS are built natively (no osxcross needed)
+#   - darwin targets on macOS are built natively (no osxcross needed); a
+#     native-cc pre-flight fails actionably before the build when Xcode
+#     Command Line Tools are missing
 #   - `make darwin-bootstrap` (scripts/bootstrap-darwin.sh) resolves ALL darwin
 #     build dependencies (host packages, rustup targets, rcodesign, osxcross +
 #     digest-pinned SDK) idempotently, and runs automatically before
@@ -157,6 +159,20 @@ verify_darwin_signature() {
     return 0
 }
 
+# native_cc_probe: on macOS hosts confirm a working C compiler (Xcode
+# Command Line Tools) before building, so failures are actionable instead of
+# opaque cc/libc crate errors.
+native_cc_probe() {
+    local tmp
+    tmp="$(mktemp -d)" || return 1
+    printf 'int main(void){return 0;}\n' > "$tmp/probe.c"
+    if ! (cd "$tmp" && "${CC:-cc}" probe.c -o probe) >/dev/null 2>&1; then
+        rm -rf "$tmp"
+        return 1
+    fi
+    rm -rf "$tmp"
+    return 0
+}
 
 # ensure_macosx_sdk: cache the digest-verified SDK tarball next to the
 # toolchain (build-time convenience only; the built toolchain already embeds
@@ -363,6 +379,12 @@ for target in "${TARGETS[@]}"; do
     fi
 
     log "== build: $target =="
+    if [[ "$os" == "darwin" && "$HOST_OS" == "Darwin" ]] && ! native_cc_probe; then
+        RESULTS["$target"]="FAILED: no working C compiler — install Xcode Command Line Tools (xcode-select --install) or run: make darwin-bootstrap"
+        BUILD_FAILURES=$((BUILD_FAILURES+1))
+        rm -f "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz"
+        continue
+    fi
     if [[ "$DARWIN_CROSS" == "1" ]]; then
         # env-scoped to this single cargo invocation: darwin toolchain vars
         # never leak into other targets' builds
