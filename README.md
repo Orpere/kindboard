@@ -108,7 +108,9 @@ style, and persisting everything crash-safely.
 macOS first run: darwin binaries are ad-hoc signed with a pure-Rust toolchain
 (no Apple Developer ID). Gatekeeper may show "unidentified developer" —
 right-click the binary → Open, or run `xattr -d com.apple.quarantine
-./kindboard` once.
+./kindboard` once. For the full picture — zero-prompt local builds, the
+double-clickable app, and Developer ID + notarization for releases — see
+[docs/macos-distribution.md](docs/macos-distribution.md).
 
 macOS from source: install Xcode Command Line Tools once (`xcode-select
 --install`) — `make darwin-bootstrap` verifies and guides you.
@@ -172,7 +174,8 @@ watch errors). Detached runs always write to a log file, so
 
 | Target | Purpose |
 |---|---|
-| `make run` | Run the desktop app (debug) |
+| `make run` | Run the desktop app (debug) — on macOS this runs `darwin-bootstrap` first (Xcode CLT + rustc ≥ 1.98) |
+| `make mac-app` | macOS only: build + open a double-clickable `dist/kindboard.app` (locally built → zero Gatekeeper prompts; see docs/macos-distribution.md) |
 | `make check` | All quality gates: `fmt --check`, `clippy -D warnings`, tests |
 | `make test` | Unit + integration tests (e2e skipped unless `KINDBOARD_E2E=1`) |
 | `make e2e` | Full suite including real-kind e2e (requires docker + kind; throwaway `kbtest-*` clusters). Covers cluster create/delete, kubeconfig merge, topology, and the CNI matrix (flannel/calico/cilium full installs) |

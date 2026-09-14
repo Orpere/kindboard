@@ -17,23 +17,26 @@
 #      compile probe; missing CLT is resolved with `xcode-select --install`
 #      under the same install policy as host packages (below; never hangs
 #      automation, exit 1 until the GUI installer dialog is completed)
-#   3. host packages (Linux only; Fedora/apt lists below) — verified with
+#   3. rust toolchain version (macOS only) — the macOS 26 SDK needs a recent
+#      rustc (>= 1.98, RUST_MIN_VERSION below); full mode runs
+#      `rustup update stable` when the installed rustc is too old
+#   4. host packages (Linux only; Fedora/apt lists below) — verified with
 #      `rpm -q --whatprovides` / `dpkg -s`, installed with sudo only when
 #      something is missing. Install policy: KINDBOARD_BOOTSTRAP_YES=1 or
 #      passwordless `sudo -n true` -> install silently; interactive tty ->
 #      print the exact command + y/N prompt; otherwise print the exact
 #      command and exit 1 (never hangs automation).
-#   4. rustup targets — Linux: aarch64-apple-darwin + x86_64-apple-darwin;
+#   5. rustup targets — Linux: aarch64-apple-darwin + x86_64-apple-darwin;
 #      macOS: the other darwin arch (the native rustc host is already
 #      usable), so a Mac can cross-build both darwin arches
-#   5. rcodesign (cargo install apple-codesign --locked; honours
+#   6. rcodesign (cargo install apple-codesign --locked; honours
 #      KINDBOARD_RCODESIGN when set and executable)
-#   6. osxcross toolchain (Linux only): clone ~/.local/src/osxcross at the
+#   7. osxcross toolchain (Linux only): clone ~/.local/src/osxcross at the
 #      pinned commit OSXCROSS_PIN (darwin-env.sh), fetch the digest-pinned SDK
 #      into the cache dir, and UNATTENDED=1 ./build.sh into OSXCROSS_DIR. A
 #      digest mismatch is a hard error — the fallback SDK pin is never used
 #      automatically (see docs/adrs/ADR-0017.md).
-#   7. status table, one line per dependency; exit 0 only when all resolved
+#   8. status table, one line per dependency; exit 0 only when all resolved
 #
 # All pins come from ../scripts/darwin-env.sh (single source of truth, shared
 # with build.sh). Everything installs into $HOME except host packages and the
@@ -53,7 +56,7 @@ while (($#)); do
     case "$1" in
         --check) CHECK_ONLY=1 ;;
         -h|--help)
-            sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *) echo "bootstrap-darwin: unknown option: $1 (use --check or nothing)" >&2; exit 2 ;;
@@ -150,7 +153,47 @@ if [[ "$PLATFORM" == "darwin" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Host packages (Linux only)
+# 3. rust toolchain version (native macOS only)
+# ---------------------------------------------------------------------------
+
+RUST_MIN_VERSION="1.98" # macOS 26 SDK needs a recent rustc (>= 1.98)
+
+version_ge() { # version_ge <a> <b>: true when a >= b (numeric major.minor)
+    [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" == "$1" ]]
+}
+
+if [[ "$PLATFORM" == "darwin" ]]; then
+    if ! command -v rustc >/dev/null 2>&1; then
+        # rustc absent: skip this row entirely — the rustup targets step
+        # (step 5) already reports rustup missing
+        log "rustc not found — skipping the rust toolchain row (the rustup targets step reports rustup missing)"
+    else
+        rustc_full="$(rustc --version 2>/dev/null \
+            | sed -n 's/^rustc \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' || true)"
+        rustc_mm="${rustc_full%.*}"
+        if [[ -z "$rustc_mm" ]]; then
+            report "rust toolchain" "MISSING" "could not parse 'rustc --version' — run: rustup update stable (need rustc >= $RUST_MIN_VERSION for the macOS 26 SDK)"
+        elif version_ge "$rustc_mm" "$RUST_MIN_VERSION"; then
+            report "rust toolchain" "OK" "rustc ${rustc_full:-$rustc_mm}"
+        elif [[ "$CHECK_ONLY" == "1" ]]; then
+            report "rust toolchain" "MISSING" "run: rustup update stable (need rustc >= $RUST_MIN_VERSION for the macOS 26 SDK)"
+        else
+            log "rustc ${rustc_full:-$rustc_mm} < $RUST_MIN_VERSION; running: rustup update stable"
+            RUSTUP_OK=0
+            rustup update stable 2>&1 | sed 's/^/bootstrap-darwin: rustup: /' || RUSTUP_OK=1
+            rustc_new="$(rustc --version 2>/dev/null \
+                | sed -n 's/^rustc \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' || true)"
+            if [[ "$RUSTUP_OK" == "0" ]] && version_ge "${rustc_new%.*}" "$RUST_MIN_VERSION"; then
+                report "rust toolchain" "OK" "rustc ${rustc_new:-updated} (updated via rustup update stable)"
+            else
+                report "rust toolchain" "MISSING" "rustup update stable failed — need rustc >= $RUST_MIN_VERSION for the macOS 26 SDK"
+            fi
+        fi
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# 4. Host packages (Linux only)
 # ---------------------------------------------------------------------------
 
 if [[ "$PLATFORM" == "dnf" || "$PLATFORM" == "apt" ]]; then
@@ -214,7 +257,7 @@ if [[ "$PLATFORM" == "dnf" || "$PLATFORM" == "apt" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 4. rustup darwin targets
+# 5. rustup darwin targets
 # ---------------------------------------------------------------------------
 
 if [[ "$PLATFORM" == "darwin" ]]; then
@@ -270,7 +313,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 5. rcodesign
+# 6. rcodesign
 # ---------------------------------------------------------------------------
 
 rcodesign_present() {
@@ -301,7 +344,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 6. osxcross toolchain (Linux only)
+# 7. osxcross toolchain (Linux only)
 # ---------------------------------------------------------------------------
 
 osxcross_wrapper() {
@@ -412,7 +455,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 7. Status table
+# 8. Status table
 # ---------------------------------------------------------------------------
 
 log "== status =="

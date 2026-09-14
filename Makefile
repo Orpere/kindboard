@@ -13,7 +13,12 @@
 # mandatory (`make dist-macos`; see also `make release`).
 #
 # No GitHub Actions by design: releases and the GitHub Pages deploy both run
-# from here (see `make release` and `make publish`).
+# from here (see `make release` and `make publish`). On macOS, `make mac-app`
+# (scripts/make-mac-app.sh) assembles a double-clickable dist/kindboard.app
+# from a locally built binary — zero Gatekeeper prompts (see
+# docs/macos-distribution.md). When the notarization env vars are set (see
+# scripts/build.sh header), darwin release zips are notarized + stapled and
+# `make release` ships them alongside the tarballs.
 
 SHELL := /bin/bash
 CARGO ?= cargo
@@ -24,9 +29,10 @@ DIST_DIR := dist
 ROOT := $(abspath .)
 REPO ?= Orpere/kindboard
 VERSION := $(shell grep -m1 '^version' crates/kindboard-app/Cargo.toml | cut -d'"' -f2)
+UNAME_S := $(shell uname -s)
 PAGES_DIR := /tmp/kindboard-pages
 
-.PHONY: help all build build-all dist-macos darwin-bootstrap run fmt fmt-check clippy test e2e audit check assets dist clean version release publish
+.PHONY: help all build build-all dist-macos darwin-bootstrap run mac-app fmt fmt-check clippy test e2e audit check assets dist clean version release publish
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -45,8 +51,16 @@ darwin-bootstrap: ## Resolve all darwin cross-build dependencies (host pkgs, rus
 dist-macos: darwin-bootstrap ## Cross-build darwin release assets (KINDBOARD_REQUIRE_DARWIN=1; deps auto-resolved via darwin-bootstrap)
 	KINDBOARD_REQUIRE_DARWIN=1 ./scripts/build.sh aarch64-apple-darwin x86_64-apple-darwin
 
+# On macOS, `make run` needs Xcode CLT + a recent rustc (macOS 26 SDK) — make
+# darwin-bootstrap verifies and guides both before the app builds.
+ifeq ($(UNAME_S),Darwin)
+run: darwin-bootstrap
+endif
 run: ## Run the desktop app (debug build)
 	cargo run -p kindboard-app
+
+mac-app: ## Build and open a double-clickable kindboard.app (macOS; locally built, zero Gatekeeper prompts)
+	./scripts/make-mac-app.sh
 
 fmt: ## Format all code
 	cargo fmt --all
@@ -100,7 +114,9 @@ endif
 	git tag -a "v$(VERSION)" -m "kindboard v$(VERSION)"
 	git push origin "v$(VERSION)"
 	gh release create "v$(VERSION)" --title "kindboard v$(VERSION)" --generate-notes \
-		$$(find $(DIST_DIR) -maxdepth 1 -name 'kindboard-*.tar.gz' | sort) $(DIST_DIR)/SHA256SUMS
+		$$(find $(DIST_DIR) -maxdepth 1 -name 'kindboard-*.tar.gz' | sort) \
+		$$(find $(DIST_DIR) -maxdepth 1 -name 'kindboard-*.zip' -type f -print | sort) \
+		$(DIST_DIR)/SHA256SUMS
 
 publish: ## Deploy web/ to GitHub Pages via the gh-pages branch (no Actions)
 	@command -v gh >/dev/null 2>&1 || { echo "error: gh CLI required"; exit 1; }

@@ -40,10 +40,41 @@
 # Artifacts land in dist/ (gitignored):
 #   dist/<target>/kindboard          raw binary
 #   dist/kindboard-<os>-<arch>.tar.gz  tarball containing just the binary
+#   dist/kindboard-<os>-<arch>.zip   deterministic ZIP of the signed binary
+#                                    (notarized release mode only, see below)
 #   dist/SHA256SUMS                  sha256 of every tarball
 # darwin binaries are ad-hoc signed with rcodesign (pure Rust) before
 # tarballing; the signature is then verified (codesign --verify on macOS,
-# structural LC_CODE_SIGNATURE + CSMAGIC check on Linux) — see ADR-0018
+# structural LC_CODE_SIGNATURE + CSMAGIC check on Linux) — see ADR-0018.
+# When the notarization env vars below are set, notarized (Developer ID)
+# release mode SUPERSEDES the ad-hoc default of ADR-0018 for that build
+# (ADR-0018 itself is unchanged: it remains the documented default for
+# env-free builds).
+#
+# Developer ID + notarization (optional; darwin targets only):
+#   KINDBOARD_APPLE_CERT_PEM           path to a PEM file containing the
+#                                      Developer ID Application certificate
+#                                      AND its private key
+#        — or (alternative) —
+#   KINDBOARD_APPLE_CERT_P12           path to a P12/PFX file containing the
+#                                      same certificate + key
+#   KINDBOARD_APPLE_CERT_P12_PASSWORD  password for that P12
+#   KINDBOARD_APPLE_API_KEY_PATH       path to the JSON produced by
+#                                      `rcodesign encode-app-store-connect-api-key`
+#   With BOTH a certificate input and the API key path set, darwin targets
+#   enter notarized release mode: (1) sign the binary with the Developer ID
+#   (`rcodesign sign --pem-source <pem>` or `--p12-file`/`--p12-password-file`),
+#   (2) verify structurally exactly as in ad-hoc mode, (3) after the tarball
+#   is created, also produce a deterministic ZIP of the binary (Apple
+#   notarizes ARCHIVES, not raw binaries; python3 zipfile with fixed
+#   date_time=(1980,1,1,0,0,0); python3 is required and checked early),
+#   (4) notarize + staple: `rcodesign notary-submit --staple --wait
+#   --api-key-path <zip>` (can take minutes — it is logged). A notarization
+#   failure FAILS the target and ships neither tarball nor zip for it.
+#   ONE input without the other FAILS the darwin target (both required
+#   together). NEITHER set -> the current ad-hoc behavior, unchanged.
+#   Credentials are never committed: export them in the shell, keep the
+#   files outside the repo. One-time Apple setup: docs/macos-distribution.md.
 #
 # Exit status: 0 if the host target built successfully, or when the host was
 # not requested and every requested target built or was gracefully skipped.
@@ -307,6 +338,7 @@ declare -A RESULTS
 HOST_OK=0
 DARWIN_OK_COUNT=0
 BUILD_FAILURES=0
+NOTARIZE=0
 
 for target in "${TARGETS[@]}"; do
     [[ -z "$target" ]] && continue
@@ -416,34 +448,142 @@ for target in "${TARGETS[@]}"; do
             # Sign the dist/ copy, not target/, to keep cargo output pristine.
             # Applies to both osxcross cross builds and native macOS builds
             # (same loop path).
+            #
+            # Notarization mode (Developer ID + notary) is env-gated and
+            # SUPERSEDES the ADR-0018 ad-hoc default when enabled; with no
+            # env vars set the ad-hoc path below is byte-for-byte unchanged.
+            NOTARIZE=0
+            HAVE_CERT=0
+            HAVE_APIKEY=0
+            PEM_SET=0
+            P12_SET=0
+            P12_PW_SET=0
+            [[ -n "${KINDBOARD_APPLE_CERT_PEM:-}" ]] && PEM_SET=1
+            [[ -n "${KINDBOARD_APPLE_CERT_P12:-}" ]] && P12_SET=1
+            [[ -n "${KINDBOARD_APPLE_CERT_P12_PASSWORD:-}" ]] && P12_PW_SET=1
+            [[ -n "${KINDBOARD_APPLE_API_KEY_PATH:-}" ]] && HAVE_APIKEY=1
+            if (( PEM_SET )) || (( P12_SET && P12_PW_SET )); then
+                HAVE_CERT=1
+            fi
+            if (( HAVE_CERT && HAVE_APIKEY )); then
+                NOTARIZE=1
+            elif (( HAVE_CERT || HAVE_APIKEY || P12_SET || P12_PW_SET )); then
+                RESULTS["$target"]="FAILED: partial notarization config — KINDBOARD_APPLE_CERT_PEM (or KINDBOARD_APPLE_CERT_P12 + KINDBOARD_APPLE_CERT_P12_PASSWORD together) and KINDBOARD_APPLE_API_KEY_PATH must all be provided to enter notarized (Developer ID) release mode — see docs/macos-distribution.md"
+                BUILD_FAILURES=$((BUILD_FAILURES+1))
+                rm -f "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz" "$DIST_DIR/kindboard-${os}-${arch_display}.zip"
+                continue
+            fi
+            if (( NOTARIZE )) && ! command -v python3 >/dev/null 2>&1; then
+                RESULTS["$target"]="FAILED: notarized (Developer ID) release mode requires python3 to create the notarization ZIP — install python3"
+                BUILD_FAILURES=$((BUILD_FAILURES+1))
+                rm -f "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz" "$DIST_DIR/kindboard-${os}-${arch_display}.zip"
+                continue
+            fi
             if [[ -z "$RCODESIGN_BIN" ]]; then
                 RESULTS["$target"]="FAILED: rcodesign not found on PATH — darwin binaries must be ad-hoc signed (cargo install apple-codesign --locked)"
                 BUILD_FAILURES=$((BUILD_FAILURES+1))
-                rm -f "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz"
+                rm -f "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz" "$DIST_DIR/kindboard-${os}-${arch_display}.zip"
                 continue
             fi
             if [[ ! -x "$RCODESIGN_BIN" ]]; then
                 RESULTS["$target"]="FAILED: rcodesign not executable: $RCODESIGN_BIN — darwin binaries must be ad-hoc signed (cargo install apple-codesign --locked)"
                 BUILD_FAILURES=$((BUILD_FAILURES+1))
-                rm -f "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz"
+                rm -f "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz" "$DIST_DIR/kindboard-${os}-${arch_display}.zip"
                 continue
             fi
             RCODESIGN_ERR="$(mktemp)"
-            if "$RCODESIGN_BIN" sign "$DIST_DIR/$target/kindboard" 2>"$RCODESIGN_ERR" \
-                && verify_darwin_signature "$DIST_DIR/$target/kindboard" 2>>"$RCODESIGN_ERR"; then
-                rm -f "$RCODESIGN_ERR"
-                log "ad-hoc signed + verified: $DIST_DIR/$target/kindboard"
+            P12_PW_FILE=""
+            if (( NOTARIZE )); then
+                log "notarized (Developer ID) release mode: signing $DIST_DIR/$target/kindboard"
+                if [[ -n "${KINDBOARD_APPLE_CERT_PEM:-}" ]]; then
+                    # --pem-source is the PEM cert+key source (listed among the
+                    # global signing settings of `rcodesign help sign`; the
+                    # options list spells it --pem-file — both are accepted)
+                    if "$RCODESIGN_BIN" sign --pem-source "$KINDBOARD_APPLE_CERT_PEM" \
+                        "$DIST_DIR/$target/kindboard" 2>"$RCODESIGN_ERR"; then
+                        SIGN_RC=0
+                    else
+                        SIGN_RC=$?
+                    fi
+                else
+                    # --p12-file + --p12-password-file: the password is passed
+                    # via a 0600 temp file so it never lands in the process list
+                    P12_PW_FILE="$(mktemp)"
+                    printf '%s' "$KINDBOARD_APPLE_CERT_P12_PASSWORD" > "$P12_PW_FILE"
+                    chmod 600 "$P12_PW_FILE"
+                    if "$RCODESIGN_BIN" sign --p12-file "$KINDBOARD_APPLE_CERT_P12" \
+                        --p12-password-file "$P12_PW_FILE" \
+                        "$DIST_DIR/$target/kindboard" 2>"$RCODESIGN_ERR"; then
+                        SIGN_RC=0
+                    else
+                        SIGN_RC=$?
+                    fi
+                fi
             else
-                RESULTS["$target"]="FAILED: rcodesign sign/verify failed: $(tr '\012' ' ' < "$RCODESIGN_ERR")"
-                rm -f "$RCODESIGN_ERR"
-                rm -f "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz"
+                if "$RCODESIGN_BIN" sign "$DIST_DIR/$target/kindboard" 2>"$RCODESIGN_ERR"; then
+                    SIGN_RC=0
+                else
+                    SIGN_RC=$?
+                fi
+            fi
+            if (( SIGN_RC == 0 )) \
+                && verify_darwin_signature "$DIST_DIR/$target/kindboard" 2>>"$RCODESIGN_ERR"; then
+                rm -f "$RCODESIGN_ERR" "${P12_PW_FILE:-}"
+                if (( NOTARIZE )); then
+                    log "Developer ID signed + verified: $DIST_DIR/$target/kindboard"
+                else
+                    log "ad-hoc signed + verified: $DIST_DIR/$target/kindboard"
+                fi
+            else
+                FAIL_MSG="rcodesign sign/verify failed: $(tr '\012' ' ' < "$RCODESIGN_ERR")"
+                (( NOTARIZE )) && FAIL_MSG="notarized (Developer ID) release mode: $FAIL_MSG"
+                RESULTS["$target"]="FAILED: $FAIL_MSG"
+                rm -f "$RCODESIGN_ERR" "${P12_PW_FILE:-}"
+                rm -f "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz" "$DIST_DIR/kindboard-${os}-${arch_display}.zip"
                 BUILD_FAILURES=$((BUILD_FAILURES+1))
                 continue
             fi
         fi
-        rm -f "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz"
+        rm -f "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz" "$DIST_DIR/kindboard-${os}-${arch_display}.zip"
         GZIP=-n tar --owner=0 --group=0 --numeric-owner --mtime='@0' \
             -C "$DIST_DIR/$target" -czf "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz" kindboard
+        if [[ "$os" == "darwin" ]] && (( NOTARIZE )); then
+            # Notarization mode: Apple notarizes ARCHIVES, not raw binaries,
+            # so after the tarball we also produce a deterministic ZIP of the
+            # signed binary (python3 zipfile, fixed timestamp 1980-01-01,
+            # deflate, unix attrs) and notarize + staple it.
+            # --staple implies --wait (rcodesign help notary-submit); the
+            # round-trip to Apple's Notary API can take minutes.
+            ZIP_PATH="$DIST_DIR/kindboard-${os}-${arch_display}.zip"
+            rm -f "$ZIP_PATH"
+            python3 - "$DIST_DIR/$target/kindboard" "$ZIP_PATH" <<'PYEOF'
+import sys, zipfile
+src, dst = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zf:
+    zi = zipfile.ZipInfo("kindboard", (1980, 1, 1, 0, 0, 0))
+    zi.compress_type = zipfile.ZIP_DEFLATED
+    zi.create_system = 3
+    zi.external_attr = 0o755 << 16
+    with open(src, "rb") as f:
+        zf.writestr(zi, f.read())
+PYEOF
+            log "notarizing + stapling $ZIP_PATH (Developer ID; can take minutes)"
+            NOTARY_ERR="$(mktemp)"
+            # --api-key-path is the flag recommended by `rcodesign help
+            # notary-submit` (the options list spells it --api-key-file;
+            # both are accepted)
+            if "$RCODESIGN_BIN" notary-submit --staple --wait \
+                --api-key-path "$KINDBOARD_APPLE_API_KEY_PATH" \
+                "$ZIP_PATH" 2>"$NOTARY_ERR"; then
+                rm -f "$NOTARY_ERR"
+                log "notarized + stapled: $ZIP_PATH"
+            else
+                RESULTS["$target"]="FAILED: notarized (Developer ID) release mode: notary-submit failed: $(tr '\012' ' ' < "$NOTARY_ERR")"
+                rm -f "$NOTARY_ERR" "$ZIP_PATH" "$DIST_DIR/kindboard-${os}-${arch_display}.tar.gz"
+                BUILD_FAILURES=$((BUILD_FAILURES+1))
+                continue
+            fi
+        fi
         RESULTS["$target"]="OK"
         [[ "$target" == "$HOST_TARGET" ]] && HOST_OK=1
         [[ "$os" == "darwin" ]] && DARWIN_OK_COUNT=$((DARWIN_OK_COUNT+1))
@@ -461,7 +601,9 @@ log "== checksums =="
 shopt -s nullglob
 TARBALLS=("$DIST_DIR"/kindboard-*.tar.gz)
 if ((${#TARBALLS[@]})); then
-    (cd "$DIST_DIR" && sha256sum kindboard-*.tar.gz > SHA256SUMS)
+    # notarized release mode adds kindboard-*.zip artifacts; include them in
+    # SHA256SUMS when present (nullglob keeps the pattern harmless otherwise)
+    (cd "$DIST_DIR" && sha256sum kindboard-*.tar.gz kindboard-*.zip > SHA256SUMS)
     log "wrote $DIST_DIR/SHA256SUMS"
 else
     rm -f "$DIST_DIR/SHA256SUMS"
