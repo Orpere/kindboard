@@ -175,8 +175,9 @@ watch errors). Detached runs always write to a log file, so
 | `make e2e` | Full suite including real-kind e2e (requires docker + kind; throwaway `kbtest-*` clusters). Covers cluster create/delete, kubeconfig merge, topology, and the CNI matrix (flannel/calico/cilium full installs) |
 | `make audit` | RustSec advisory scan (needs `cargo install cargo-audit`) |
 | `make build` / `make dist` | Release build into `dist/` + `SHA256SUMS` (runs all gates first) |
-| `make build-all` | Attempt all four targets: linux x86_64/aarch64, darwin x86_64/arm64. On Linux hosts the darwin targets build via osxcross when it is present (see ADR-0017), else they are skipped with guidance |
-| `make dist-macos` | Cross-build darwin release assets with `KINDBOARD_REQUIRE_DARWIN=1` (fails if osxcross is not installed); binaries are ad-hoc signed via rcodesign |
+| `make build-all` | Attempt all four targets: linux x86_64/aarch64, darwin x86_64/arm64. Runs `darwin-bootstrap` first, then on Linux hosts the darwin targets build via osxcross when it is present (see ADR-0017), else they are skipped with guidance |
+| `make dist-macos` | Cross-build darwin release assets with `KINDBOARD_REQUIRE_DARWIN=1`; auto-resolves all darwin dependencies first via `make darwin-bootstrap`; binaries are ad-hoc signed via rcodesign |
+| `make darwin-bootstrap` | Resolve all darwin (macOS) cross-build dependencies — host packages (sudo, confirm-first or `KINDBOARD_BOOTSTRAP_YES=1`), rustup targets, rcodesign, osxcross toolchain + digest-pinned SDK. Idempotent; `--check` mode via `./scripts/bootstrap-darwin.sh --check` |
 | `make assets` | Fetch + resize the official logos into `assets/` (ImageMagick) |
 | `make clean` | Remove build artifacts and `dist/` |
 | `make help` | List all targets |

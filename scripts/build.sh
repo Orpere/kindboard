@@ -30,6 +30,10 @@
 #     built, it is not skippable (targets skipped for lack of osxcross never
 #     reach the signing step)
 #   - darwin targets on macOS are built natively (no osxcross needed)
+#   - `make darwin-bootstrap` (scripts/bootstrap-darwin.sh) resolves ALL darwin
+#     build dependencies (host packages, rustup targets, rcodesign, osxcross +
+#     digest-pinned SDK) idempotently, and runs automatically before
+#     dist-macos / build-all / release; this script remains a pure builder
 #
 # Artifacts land in dist/ (gitignored):
 #   dist/<target>/kindboard          raw binary
@@ -63,36 +67,19 @@ RCODESIGN_BIN="${KINDBOARD_RCODESIGN:-$(command -v rcodesign || true)}"
 # ---------------------------------------------------------------------------
 # Darwin cross-build via osxcross (docs/adrs/ADR-0017.md)
 #
+# All darwin toolchain pins (osxcross dir, SDK version/name/URL/digest, the
+# manual fallback pin pair, SDK cache dir, osxcross source dir) live in
+# scripts/darwin-env.sh — the single source of truth shared with
+# scripts/bootstrap-darwin.sh. `make darwin-bootstrap`
+# (scripts/bootstrap-darwin.sh) resolves all darwin deps (host packages,
+# rustup targets, rcodesign, osxcross + digest-pinned SDK); this script
+# remains a pure builder and only detects + builds (ensure_macosx_sdk below
+# caches the SDK tarball when osxcross is detected).
+#
 # The Apple SDK tarball is a community redistribution (github.com/joseluisq/
 # macosx-sdks) of Apple's macOS SDK; it is downloaded here only as a
 # build-time convenience for the osxcross toolchain and is never shipped.
-#
-# Host prerequisites (Fedora, one-time, outside the repo):
-#   sudo dnf install clang cmake lld llvm libstdc++-devel libstdc++-static \
-#     zlib-devel openssl-devel libxml2-devel
-#   rustup target add aarch64-apple-darwin x86_64-apple-darwin
-#   rcodesign is additionally required for darwin builds:
-#     cargo install apple-codesign --locked
-# Toolchain (one-time, outside the repo):
-#   git clone https://github.com/tpoechtrager/osxcross ~/.local/src/osxcross
-#   curl --proto '=https' -fL "$MACOSX_SDK_URL" -o ~/.local/src/osxcross/tarballs/MacOSX26.1.sdk.tar.xz
-#   echo "$MACOSX_SDK_DIGEST  ~/.local/src/osxcross/tarballs/MacOSX26.1.sdk.tar.xz" \
-#     | sha256sum -c
-#   cd ~/.local/src/osxcross && UNATTENDED=1 \
-#     TARGET_DIR="$OSXCROSS_DIR" OSX_VERSION_MIN=10.13 ./build.sh
-OSXCROSS_DIR="${OSXCROSS_DIR:-${KINDBOARD_OSXCROSS_DIR:-$HOME/.local/opt/osxcross}}"
-MACOSX_SDK_VERSION="26.1"
-MACOSX_SDK_NAME="MacOSX${MACOSX_SDK_VERSION}.sdk.tar.xz"
-MACOSX_SDK_URL="https://github.com/joseluisq/macosx-sdks/releases/download/${MACOSX_SDK_VERSION}/${MACOSX_SDK_NAME}"
-MACOSX_SDK_DIGEST="beee7212d265a6d2867d0236cc069314b38d5fb3486a6515734e76fa210c784c"
-# Manual fallback pin pair (MacOSX15.5): swap in by hand if the primary
-# SDK/mirror above ever changes. Deliberately NOT an automatic fallback — an
-# unverified SDK must never be used silently.
-MACOSX_SDK_FALLBACK_VERSION="15.5"
-MACOSX_SDK_FALLBACK_NAME="MacOSX${MACOSX_SDK_FALLBACK_VERSION}.sdk.tar.xz"
-MACOSX_SDK_FALLBACK_URL="https://github.com/joseluisq/macosx-sdks/releases/download/${MACOSX_SDK_FALLBACK_VERSION}/${MACOSX_SDK_FALLBACK_NAME}"
-MACOSX_SDK_FALLBACK_DIGEST="c15cf0f3f17d714d1aa5a642da8e118db53d79429eb015771ba816aa7c6c1cbd"
-MACOSX_SDK_CACHE_DIR="${KINDBOARD_MACOSX_SDK_CACHE_DIR:-$HOME/.local/share/kindboard/sdk}"
+source "$SCRIPT_DIR/darwin-env.sh"
 KINDBOARD_REQUIRE_DARWIN="${KINDBOARD_REQUIRE_DARWIN:-0}"
 
 SUPPORTED_TARGETS=(

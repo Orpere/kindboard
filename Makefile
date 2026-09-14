@@ -6,8 +6,11 @@
 #
 # Darwin (macOS) assets: on Linux hosts scripts/build.sh cross-builds them via
 # osxcross when it is detected (~/.local/opt/osxcross, see ADR-0017), else
-# skips them with guidance. KINDBOARD_REQUIRE_DARWIN=1 makes them mandatory
-# (`make dist-macos`; see also `make release`).
+# skips them with guidance. `make darwin-bootstrap` (scripts/bootstrap-darwin.sh)
+# idempotently resolves every darwin dependency — host packages, rustup targets,
+# rcodesign, osxcross + digest-pinned SDK — and runs automatically before
+# dist-macos, build-all, and release. KINDBOARD_REQUIRE_DARWIN=1 makes darwin
+# mandatory (`make dist-macos`; see also `make release`).
 #
 # No GitHub Actions by design: releases and the GitHub Pages deploy both run
 # from here (see `make release` and `make publish`).
@@ -23,7 +26,7 @@ REPO ?= Orpere/kindboard
 VERSION := $(shell grep -m1 '^version' crates/kindboard-app/Cargo.toml | cut -d'"' -f2)
 PAGES_DIR := /tmp/kindboard-pages
 
-.PHONY: help all build build-all dist-macos run fmt fmt-check clippy test e2e audit check assets dist clean version release publish
+.PHONY: help all build build-all dist-macos darwin-bootstrap run fmt fmt-check clippy test e2e audit check assets dist clean version release publish
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -33,10 +36,13 @@ all: check build ## Quality gates + host release build into dist/
 build: ## Host release build (fmt+clippy+test+audit gates, then dist/ + SHA256SUMS)
 	./scripts/build.sh
 
-build-all: ## Attempt all 4 targets: linux x86_64/aarch64, darwin x86_64/arm64 (darwin builds when osxcross is present, else skips)
+build-all: darwin-bootstrap ## Attempt all 4 targets: linux x86_64/aarch64, darwin x86_64/arm64 (deps auto-resolved; darwin builds when osxcross is present, else skips)
 	./scripts/build.sh --all
 
-dist-macos: ## Cross-build darwin release assets (KINDBOARD_REQUIRE_DARWIN=1; fails without osxcross)
+darwin-bootstrap: ## Resolve all darwin cross-build dependencies (host pkgs, rustup targets, rcodesign, osxcross + pinned SDK)
+	./scripts/bootstrap-darwin.sh
+
+dist-macos: darwin-bootstrap ## Cross-build darwin release assets (KINDBOARD_REQUIRE_DARWIN=1; deps auto-resolved via darwin-bootstrap)
 	KINDBOARD_REQUIRE_DARWIN=1 ./scripts/build.sh aarch64-apple-darwin x86_64-apple-darwin
 
 run: ## Run the desktop app (debug build)
@@ -82,11 +88,12 @@ release: ## Tag v$(VERSION) + GitHub release with dist/ assets (darwin required 
 	@git rev-parse -q --verify "refs/tags/v$(VERSION)" >/dev/null && { echo "error: tag v$(VERSION) already exists"; exit 1; } || true
 	@rm -f $(DIST_DIR)/kindboard-darwin-*.tar.gz
 	@rm -rf $(DIST_DIR)/aarch64-apple-darwin $(DIST_DIR)/x86_64-apple-darwin
-	$(MAKE) build
 ifeq ($(KINDBOARD_REQUIRE_DARWIN),1)
-	@# explicit, not just the exported knob: build host + both darwin targets in one pass
+	@# bootstrap first, then the explicit knob: build host + both darwin targets in one pass
+	$(MAKE) darwin-bootstrap && $(MAKE) build
 	@test -n "$$(find $(DIST_DIR) -maxdepth 1 -name 'kindboard-darwin-*.tar.gz' 2>/dev/null)" || { echo "error: darwin builds required but missing — see docs/adrs/ADR-0017.md"; exit 1; }
 else
+	$(MAKE) build
 	-$(MAKE) dist-macos
 	@test -n "$$(find $(DIST_DIR) -maxdepth 1 -name 'kindboard-darwin-*.tar.gz' 2>/dev/null)" || { echo "WARNING: release will lack darwin assets (osxcross not detected — see docs/adrs/ADR-0017.md)"; }
 endif
