@@ -3,8 +3,9 @@
 Static, self-contained presentation site for kindboard.
 
 **Live:** <https://orpere.github.io/kindboard/> — published from this folder
-by the GitHub Pages workflow (`.github/workflows/pages.yml`); every push that
-touches `web/**` redeploys automatically.
+with `make publish` (repo root): it pushes `web/**` to the `gh-pages` branch
+and switches GitHub Pages to legacy branch publishing. No CI, no GitHub
+Actions — deploys run locally from the Makefile.
 
 ## Deploy anywhere
 
@@ -38,15 +39,12 @@ Over http(s), a service worker (`sw.js`) caches all assets on first visit, so
 subsequent visits — and reloads after the server is gone — work fully offline.
 `file://` needs no service worker: every asset is already a local file.
 
-## Before publishing
+## Publishing
 
-1. Replace the **two flagged GitHub placeholder links** (header "View on
-   GitHub" button and the footer "GitHub" link — both marked with an HTML
-   comment) with your repository URL.
-2. Update the sample clone URL in the Getting Started code block
-   (`https://github.com/<owner>/kindboard.git`, also flagged).
-3. Optionally replace the screenshots in `assets/img/` with your own
-   captures — keep the same filenames (the page references them).
+From the repo root: edit `web/*`, commit, then `make publish`. It copies this
+folder into a scratch git repo, force-pushes it to the `gh-pages` branch, and
+points GitHub Pages at that branch (`build_type=legacy`, no Actions). All
+links and references in this repo are already final — no placeholders.
 
 ## Files
 
