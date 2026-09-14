@@ -402,7 +402,16 @@ fn main() {
                 .append(true)
                 .open(path)
             {
-                Ok(file) => Some(file),
+                Ok(file) => {
+                    // Logs can contain exec argv and environment details;
+                    // never leave them world-readable (audit finding L5).
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+                    }
+                    Some(file)
+                }
                 Err(err) => {
                     if troubleshoot.log_file.is_some() {
                         eprintln!("kindboard: cannot open log file {}: {err}", path.display());

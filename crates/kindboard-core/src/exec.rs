@@ -598,55 +598,84 @@ fn terminate_tree(pid: Option<u32>, force: bool) {
 }
 
 /// Cut the stored tail down to the amount shown in error messages,
-/// always ending on a char boundary.
+/// always ending on a char boundary, and scrub kubeconfig secrets so they
+/// never surface in error strings or logs (the tail is the only raw stderr
+/// fragment that escapes into UI-facing errors — audit finding L3).
+/// Redaction is applied per line: a stderr tail is multi-line, and the
+/// scrubber matches keys at the start of a line.
 fn tail_for_error(tail: &str) -> String {
-    if tail.len() <= STDERR_TAIL_BYTES {
-        return tail.to_string();
-    }
-    let start = tail.len() - STDERR_TAIL_BYTES;
-    match tail.char_indices().find(|(i, _)| *i >= start) {
-        Some((i, _)) => tail[i..].to_string(),
-        None => tail.to_string(),
-    }
+    let cut = if tail.len() <= STDERR_TAIL_BYTES {
+        tail.to_string()
+    } else {
+        let start = tail.len() - STDERR_TAIL_BYTES;
+        match tail.char_indices().find(|(i, _)| *i >= start) {
+            Some((i, _)) => tail[i..].to_string(),
+            None => tail.to_string(),
+        }
+    };
+    cut.split('\n')
+        .map(redact_kubeconfig_secrets)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Kubeconfig YAML keys whose values are secrets (or secret-like) and must
-/// never reach logs or progress events.
+/// never reach logs, error messages, or progress events. Matched with
+/// optional whitespace between the key and the colon (`token : value` is
+/// valid YAML too).
 const KUBECONFIG_SECRET_KEYS: &[&str] = &[
-    "client-key-data:",
-    "client-certificate-data:",
-    "token:",
-    "password:",
-    "client-secret:",
+    "client-key-data",
+    "client-certificate-data",
+    "token",
+    "password",
+    "client-secret",
 ];
 
 /// Scrub a single output line of kubeconfig secrets before it is forwarded
-/// to progress events.
+/// to progress events, error messages, or logs.
 ///
 /// Matches lines of the form `key: value` (the shape kubeconfig YAML uses
-/// for data fields) and replaces the value with `<redacted>`. Lines that
-/// don't match pass through untouched, so ordinary CLI output is unaffected.
-/// This is the runtime safeguard for the event channel: subprocess stdout is
-/// the only path kubeconfig bytes (e.g. `kind get kubeconfig`) could take
-/// into UI progress events. Parsing consumers of `CmdOutput` (kubeconfig
-/// merge) use the unredacted collected output — this function only guards
-/// the logging/event boundary.
+/// for data fields, with optional whitespace before the colon) and replaces
+/// the value with `<redacted>`. Lines that don't match pass through
+/// untouched, so ordinary CLI output is unaffected. This is the runtime
+/// safeguard for the event/log boundary: subprocess stdout/stderr is the
+/// only path kubeconfig bytes (e.g. `kind get kubeconfig`) could take into
+/// UI progress events or error strings. Parsing consumers of `CmdOutput`
+/// (kubeconfig merge) use the unredacted collected output — this function
+/// only guards the logging/event boundary.
 pub fn redact_kubeconfig_secrets(line: &str) -> String {
     let trimmed = line.trim_start();
     for key in KUBECONFIG_SECRET_KEYS {
-        if let Some(rest) = trimmed.strip_prefix(key) {
-            let (value_start, _) = match rest.char_indices().find(|(_, c)| !c.is_whitespace()) {
-                Some(found) => found,
-                None => return line.to_string(),
-            };
-            let indent_len = line.len() - trimmed.len();
-            let mut redacted = String::with_capacity(line.len());
-            redacted.push_str(&line[..indent_len]);
-            redacted.push_str(key);
-            redacted.push_str(&rest[..value_start]);
-            redacted.push_str("<redacted>");
-            return redacted;
+        let Some(mut rest) = trimmed.strip_prefix(key) else {
+            continue;
+        };
+        // Only whitespace may separate the key from the colon.
+        let mut pre_colon_ws = 0;
+        for (i, c) in rest.char_indices() {
+            if !c.is_whitespace() {
+                break;
+            }
+            pre_colon_ws = i + c.len_utf8();
         }
+        rest = &rest[pre_colon_ws..];
+        if !rest.starts_with(':') {
+            // e.g. "tokenized output is fine" — not a secret field.
+            continue;
+        }
+        let after_colon = &rest[1..];
+        let (value_start, _) = match after_colon.char_indices().find(|(_, c)| !c.is_whitespace()) {
+            Some(found) => found,
+            None => return line.to_string(), // key with no value → untouched
+        };
+        let indent_len = line.len() - trimmed.len();
+        let mut redacted = String::with_capacity(line.len());
+        redacted.push_str(&line[..indent_len]);
+        redacted.push_str(key);
+        redacted.push_str(&trimmed[key.len()..key.len() + pre_colon_ws]);
+        redacted.push(':');
+        redacted.push_str(&after_colon[..value_start]);
+        redacted.push_str("<redacted>");
+        return redacted;
     }
     line.to_string()
 }
@@ -699,6 +728,37 @@ mod tests {
             redact_kubeconfig_secrets("tokenized output is fine"),
             "tokenized output is fine"
         );
+    }
+
+    #[test]
+    fn redact_handles_whitespace_before_colon_and_key_prefixes() {
+        // YAML allows whitespace between key and colon.
+        assert_eq!(
+            redact_kubeconfig_secrets("    token : secret-value"),
+            "    token : <redacted>"
+        );
+        assert_eq!(
+            redact_kubeconfig_secrets("password:\tv"),
+            "password:\t<redacted>"
+        );
+        // A longer key sharing the prefix must not be redacted.
+        assert_eq!(
+            redact_kubeconfig_secrets("tokens: not-a-secret"),
+            "tokens: not-a-secret"
+        );
+        assert_eq!(
+            redact_kubeconfig_secrets("client-secret:\tbase64..."),
+            "client-secret:\t<redacted>"
+        );
+    }
+
+    #[test]
+    fn error_tail_scrubs_kubeconfig_secrets() {
+        let tail = tail_for_error("some output\ntoken: secret-value\npassword : hunter2");
+        assert!(!tail.contains("secret-value"), "tail leaked a token");
+        assert!(!tail.contains("hunter2"), "tail leaked a password");
+        assert!(tail.contains("token: <redacted>"));
+        assert!(tail.contains("password : <redacted>"));
     }
 
     #[tokio::test]

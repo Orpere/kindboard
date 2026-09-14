@@ -114,7 +114,10 @@ impl KubeconfigStore {
     /// the store and make it the current context.
     ///
     /// Re-running with the same name replaces the previous entries (no
-    /// duplicates). The server URL must parse as a URL.
+    /// duplicates). The server URL must parse as a URL and use the `https`
+    /// scheme: a crafted context must not be able to persist a non-HTTPS
+    /// server (plaintext/file URLs) into the user's kubeconfig (audit
+    /// finding L4).
     pub fn ensure_context(
         &mut self,
         cluster_name: &str,
@@ -123,10 +126,20 @@ impl KubeconfigStore {
         client_cert_data: &str,
         client_key_data: &str,
     ) -> Result<()> {
-        if let Err(err) = url::Url::parse(server) {
+        let parsed = match url::Url::parse(server) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                return Err(KubeconfigError::InvalidServer {
+                    url: server.to_string(),
+                    reason: err.to_string(),
+                }
+                .into());
+            }
+        };
+        if parsed.scheme() != "https" {
             return Err(KubeconfigError::InvalidServer {
                 url: server.to_string(),
-                reason: err.to_string(),
+                reason: "only https:// servers are accepted".to_string(),
             }
             .into());
         }
@@ -549,6 +562,33 @@ some-top-level-unknown: hello
                 assert_eq!(url, "not a url");
             }
             other => panic!("expected InvalidServer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ensure_context_rejects_non_https_servers() {
+        // Audit finding L4: a crafted context must not persist a non-HTTPS
+        // server into the user's kubeconfig.
+        for server in [
+            "http://127.0.0.1:1",
+            "file:///etc/passwd",
+            "ftp://example.com/config",
+            "127.0.0.1:1",
+        ] {
+            let mut store = KubeconfigStore::empty();
+            let err = store
+                .ensure_context("demo", server, "A", "B", "C")
+                .unwrap_err();
+            match err {
+                crate::CoreError::Kubeconfig(KubeconfigError::InvalidServer { url, .. }) => {
+                    assert_eq!(url, server);
+                }
+                other => panic!("expected InvalidServer for {server}, got {other:?}"),
+            }
+            assert!(
+                store.config().clusters.is_empty(),
+                "nothing merged for {server}"
+            );
         }
     }
 

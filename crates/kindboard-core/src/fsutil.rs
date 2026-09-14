@@ -35,16 +35,16 @@ fn atomic_write_impl(path: &Path, bytes: &[u8], private: bool) -> io::Result<()>
     if path.is_file() {
         backup(path)?;
     }
-    let tmp = tmp_sibling(path);
+    let (mut file, tmp) = create_new_temp(path)?;
+    if private {
+        set_private_mode(&file)?;
+    }
     {
         use std::io::Write;
-        let mut file = std::fs::File::create(&tmp)?;
-        if private {
-            set_private_mode(&file)?;
-        }
         file.write_all(bytes)?;
         file.sync_all()?;
     }
+    drop(file);
     match std::fs::rename(&tmp, path) {
         Ok(()) => Ok(()),
         Err(err) => {
@@ -52,6 +52,29 @@ fn atomic_write_impl(path: &Path, bytes: &[u8], private: bool) -> io::Result<()>
             Err(err)
         }
     }
+}
+
+/// Open a fresh sibling temp file with O_EXCL semantics (`create_new`):
+/// never follows a pre-planted symlink — a planted path fails creation
+/// instead of being written through (audit finding L2). Retries with a new
+/// name on the (tampering-only) collision case.
+fn create_new_temp(base: &Path) -> io::Result<(std::fs::File, PathBuf)> {
+    for _ in 0..16 {
+        let tmp = tmp_sibling(base);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+        {
+            Ok(file) => return Ok((file, tmp)),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a unique temp file",
+    ))
 }
 
 /// Restrict a file to owner read/write only (`0600`) before data is written.
@@ -86,12 +109,33 @@ pub(crate) async fn sha256_file_hex(path: &Path) -> io::Result<String> {
 }
 
 /// Copy `path` to `<path>.bak`, replacing any existing backup.
+///
+/// Security (audit finding L2): the copy goes through a fresh O_EXCL temp
+/// file and a final `rename`, so a pre-planted symlink at `<path>.bak` is
+/// atomically *replaced*, never followed (`std::fs::copy` would write
+/// through the symlink). Source permissions are copied explicitly so a
+/// `0600` kubeconfig never gains a world-readable backup.
 pub(crate) fn backup(path: &Path) -> io::Result<()> {
     let mut bak = path.as_os_str().to_owned();
     bak.push(".bak");
     let bak = PathBuf::from(bak);
-    std::fs::copy(path, &bak)?;
-    Ok(())
+    let src = std::fs::File::open(path)?;
+    let src_perms = src.metadata()?.permissions();
+    let (mut dst, tmp) = create_new_temp(&bak)?;
+    {
+        let mut src = src;
+        std::io::copy(&mut src, &mut dst)?;
+    }
+    dst.set_permissions(src_perms)?;
+    dst.sync_all()?;
+    drop(dst);
+    match std::fs::rename(&tmp, &bak) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(err)
+        }
+    }
 }
 
 /// Path of the backup file for `path` (used by tests and callers that
@@ -185,6 +229,50 @@ mod tests {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "private files must be owner-only");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backup_replaces_a_planted_symlink_instead_of_writing_through_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = temp_file("symlink-def");
+        let victim = temp_file("symlink-victim");
+        atomic_write_private(&path, b"kubeconfig secret").unwrap();
+        std::fs::write(&victim, b"unrelated victim content").unwrap();
+
+        // Plant a symlink at `<path>.bak` pointing at the victim.
+        let bak = backup_path(&path);
+        let _ = std::fs::remove_file(&bak);
+        std::os::unix::fs::symlink(&victim, &bak).unwrap();
+
+        // A second write triggers the backup path; the symlink must be
+        // replaced by a real copy and the victim must be untouched.
+        atomic_write_private(&path, b"kubeconfig secret v2").unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "unrelated victim content",
+            "backup must not write through a planted symlink"
+        );
+        let bak_meta = std::fs::symlink_metadata(&bak).unwrap();
+        assert!(
+            !bak_meta.file_type().is_symlink(),
+            "backup must replace the symlink"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&bak).unwrap(),
+            "kubeconfig secret",
+            "backup must hold the previous content"
+        );
+        let bak_mode = bak_meta.permissions().mode() & 0o777;
+        assert_eq!(
+            bak_mode, 0o600,
+            "a private file must not gain a world-readable backup"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&bak);
+        let _ = std::fs::remove_file(&victim);
     }
 
     #[tokio::test]

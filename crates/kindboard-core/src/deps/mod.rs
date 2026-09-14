@@ -1147,7 +1147,16 @@ pub async fn install_with_progress(
                         })
                         .await;
                 }
-                if step.program == "curl"
+                // Security gate (audit finding H1): every download step must
+                // pass its pinned sha256 BEFORE any later step consumes the
+                // file. The Windows plan runs `curl.exe`, and Windows program
+                // names are case-insensitive — match the whole curl family
+                // case-insensitively so the gate can never be skipped by a
+                // spelling/case change. The `-o` target must also resolve to
+                // a `DownloadVerify` entry, anchoring the gate to the file
+                // the plan declares verified.
+                if (step.program.eq_ignore_ascii_case("curl")
+                    || step.program.eq_ignore_ascii_case("curl.exe"))
                     && let Some(download_path) = step
                         .args
                         .iter()
@@ -2260,6 +2269,85 @@ mod tests {
                 assert!(!line.contains('|'), "{line}");
                 assert!(!line.contains("&&"), "{line}");
                 assert!(!line.contains("$("), "{line}");
+            }
+        }
+    }
+
+    // Security invariant (audit finding H1 regression): on EVERY platform,
+    // EVERY curl-family download step must have a pinned sha256 verification
+    // entry targeting its exact `-o` file, and every verification entry must
+    // correspond to exactly one download step. The install loop verifies a
+    // file before any later step can consume it — this test pins the plan
+    // shape that guarantee depends on (the Windows plan runs `curl.exe`,
+    // which previously escaped the `program == "curl"` gate).
+    #[test]
+    fn every_download_step_is_sha256_verified_on_all_platforms() {
+        const ALL_TOOLS: [ToolId; 8] = [
+            ToolId::Docker,
+            ToolId::Kind,
+            ToolId::Kubectl,
+            ToolId::Helm,
+            ToolId::Cilium,
+            ToolId::K9s,
+            ToolId::Kubectx,
+            ToolId::Kustomize,
+        ];
+        let platforms: [Platform; 3] = [linux_none(), macos(), windows()];
+        let is_curl = |program: &str| {
+            program.eq_ignore_ascii_case("curl") || program.eq_ignore_ascii_case("curl.exe")
+        };
+
+        for id in ALL_TOOLS {
+            for platform in &platforms {
+                let Ok(plan) = plan_install_for(id, platform, Path::new("/tmp/bin")) else {
+                    // No recipe for this tool on this platform is allowed
+                    // only when it is not installable at all (e.g. Docker
+                    // on Windows without choco); the invariant only covers
+                    // plans that exist.
+                    continue;
+                };
+                let mut verified_files = std::collections::HashMap::<&Path, usize>::new();
+                for step in &plan.steps {
+                    if !is_curl(&step.program) {
+                        continue;
+                    }
+                    let download_path = step
+                        .args
+                        .iter()
+                        .position(|arg| arg == "-o")
+                        .and_then(|pos| step.args.get(pos + 1))
+                        .map(Path::new)
+                        .expect("curl-family step must have -o <file>");
+                    let check = plan
+                        .verify
+                        .iter()
+                        .find(|check| check.file == download_path)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "no sha256 verify entry for {} download ({id:?} on {:?})",
+                                download_path.display(),
+                                platform.os
+                            )
+                        });
+                    assert!(
+                        !check.expected_sha256.is_empty(),
+                        "empty sha256 pin for {} ({id:?})",
+                        download_path.display()
+                    );
+                    *verified_files.entry(download_path).or_insert(0) += 1;
+                }
+                for check in &plan.verify {
+                    let count = verified_files
+                        .get(check.file.as_path())
+                        .copied()
+                        .unwrap_or(0);
+                    assert_eq!(
+                        count,
+                        1,
+                        "verify entry for {} must match exactly one curl step ({id:?})",
+                        check.file.display()
+                    );
+                }
             }
         }
     }
