@@ -83,9 +83,11 @@ pub struct Palette {
     pub accent_hover: Color32,
     /// Text on the accent fill (always legible per R8).
     pub on_accent: Color32,
-    /// Tint for embedded logo images (tool logos + brand mark). White
-    /// lettering is invisible on light backgrounds, so light themes use a
-    /// dark tint instead (ADR-0024); must contrast with `bg` in every theme.
+    /// Multiplicative tint for embedded logo images (tool logos + brand
+    /// mark). `WHITE` is identity (original brand colors); every theme uses
+    /// it. The Light theme's white-lettering artwork is instead recolored
+    /// dark at texture load (`icons::LIGHT_RECOLOR_TARGET`, ADR-0025) —
+    /// tinting everything dark would turn the logos into black blobs.
     pub logo_tint: Color32,
     /// Healthy/ready state.
     pub green: Color32,
@@ -195,7 +197,9 @@ const fn light() -> Palette {
         accent: Color32::from_rgb(0x1b, 0x7f, 0xb2),
         accent_hover: Color32::from_rgb(0x18, 0x6c, 0x97),
         on_accent: Color32::from_rgb(0xff, 0xff, 0xff),
-        logo_tint: Color32::from_rgb(0x2f, 0x3a, 0x45),
+        // Identity (ADR-0025): Light paints original brand colors; the
+        // white-lettering artworks are recolored at texture load.
+        logo_tint: Color32::WHITE,
         green: Color32::from_rgb(0x1f, 0x8a, 0x3d),
         amber: Color32::from_rgb(0xb3, 0x6b, 0x00),
         red: Color32::from_rgb(0xc0, 0x39, 0x2b),
@@ -481,12 +485,22 @@ mod tests {
     }
 
     #[test]
-    fn logo_tint_contrasts_with_bg_in_every_theme() {
-        // Regression (ADR-0024): logos were tinted WHITE, which made the
-        // (mostly white) logo lettering invisible on the Light theme. The
-        // tint must contrast with the background in every theme (≥ 3:1 for
-        // large glyphs).
+    fn logo_tint_contract_per_theme() {
+        // ADR-0025: `WHITE` is the identity tint — every theme paints logos
+        // in their original brand colors. Readability on the Light theme is
+        // provided by the load-time recolor (icons::LIGHT_RECOLOR_TARGET),
+        // not by tinting everything dark (ADR-0024's approach, which made
+        // the logos black silhouettes).
         for id in ThemeId::ALL {
+            assert_eq!(
+                id.palette().logo_tint,
+                Color32::WHITE,
+                "{id:?}: logo_tint must stay the identity tint"
+            );
+        }
+        // The dark themes' white-on-dark silhouette look must remain
+        // readable (≥ 3:1 for large glyphs).
+        for id in [ThemeId::Dark, ThemeId::HighContrast] {
             let pal = id.palette();
             let ratio = contrast(pal.bg, pal.logo_tint);
             assert!(
@@ -501,16 +515,19 @@ mod tests {
     }
 
     #[test]
-    fn logo_tint_values_are_stable() {
-        // Dark/HighContrast keep white (dark backgrounds); Light uses a dark
-        // neutral so white logo lettering reads as dark on pale surfaces.
-        assert_eq!(ThemeId::Dark.palette().logo_tint, Color32::WHITE);
-        assert_eq!(ThemeId::HighContrast.palette().logo_tint, Color32::WHITE);
-        assert_eq!(
-            ThemeId::Light.palette().logo_tint,
-            Color32::from_rgb(0x2f, 0x3a, 0x45)
+    fn light_logo_recolor_target_contrasts_with_light_bg() {
+        // Regression (ADR-0024 → ADR-0025): white logo lettering must be
+        // visible on the Light theme. The load-time recolor target must
+        // clear 3:1 (large glyphs) on the pale background.
+        let [r, g, b] = crate::icons::LIGHT_RECOLOR_TARGET;
+        let target = Color32::from_rgb(r, g, b);
+        let pal = ThemeId::Light.palette();
+        let ratio = contrast(pal.bg, target);
+        assert!(
+            ratio >= 3.0,
+            "recolor target {target:?} on Light bg {:?} = {ratio:.2}:1 (need ≥ 3:1)",
+            pal.bg
         );
-        assert_ne!(ThemeId::Light.palette().logo_tint, Color32::WHITE);
     }
 
     #[test]

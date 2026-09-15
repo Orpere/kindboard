@@ -12,7 +12,7 @@
 (function (global) {
   "use strict";
 
-  var VERSION = "v0.1.12";
+  var VERSION = "v0.1.13";
   var RELEASES = "https://github.com/Orpere/kindboard/releases";
   var ARTIFACTS = {
     linux: RELEASES + "/download/" + VERSION + "/kindboard-linux-x86_64.tar.gz",

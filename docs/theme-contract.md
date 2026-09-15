@@ -50,7 +50,7 @@ pub struct Palette {
     pub accent: Color32,
     pub accent_hover: Color32,
     pub on_accent: Color32,
-    pub logo_tint: Color32,  // embedded-logo tint: WHITE on dark themes, 0x2f3a45 on Light (ADR-0024)
+    pub logo_tint: Color32,  // identity tint (WHITE) in every theme; Light-theme white-lettering artwork is recolored at load time (ADR-0025)
     pub green: Color32,
     pub amber: Color32,
     pub red: Color32,
@@ -134,7 +134,7 @@ Internal (private) implementation notes:
 | accent | `0x3da5d9` | `0x1b7fb2` | `0x1f9bd6` |
 | accent_hover | `0x3d86ad` | `0x186c97` | `0x3da5d9` |
 | on_accent | `0x060d12` | `0xffffff` | `0x000000` |
-| logo_tint | `WHITE` | `0x2f3a45` | `WHITE` |
+| logo_tint | `WHITE` | `WHITE` (identity) | `WHITE` |
 | green | `0x4dc064` | `0x1f8a3d` | `0x00c853` |
 | amber | `0xf0a52e` | `0xb36b00` | `0xff9800` |
 | red | `0xe5534b` | `0xc0392b` | `0xff3b30` |
