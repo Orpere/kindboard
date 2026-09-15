@@ -1,11 +1,22 @@
-// kindboard website — service worker: offline cache of static assets.
-// Plain ES5-style script; cache-first for same-origin GET requests.
+// kindboard website — service worker.
+//
+// Strategy (fixes the "stale site after a release" problem):
+//   - Navigations and the files that change on every release
+//     (index.html, styles.css, app.js, download.js, network.js):
+//     NETWORK-FIRST with cache fallback — online visitors always get the
+//     current page, and every successful fetch refreshes the offline cache.
+//     No manual cache-version bump is needed per release anymore.
+//   - Everything else (images, favicons): CACHE-FIRST with a background
+//     refresh (stale-while-revalidate) — heavy, rarely-changed assets load
+//     instantly, and screenshots with new filenames are never stale.
+// Offline: the cached page + assets still serve fully after the first visit.
+// Plain ES5-style script.
 
 // Cache name is scoped to this service worker's scope path, so several
 // kindboard deployments (or other projects) sharing one origin each keep
 // their own cache and this SW never deletes anything outside its scope.
 var SCOPE_PATH = new URL(self.registration.scope).pathname;
-var CACHE_PREFIX = "kindboard-site-v8:";
+var CACHE_PREFIX = "kindboard-site-v9:";
 var CACHE = CACHE_PREFIX + SCOPE_PATH;
 var ASSETS = [
   "./",
@@ -27,6 +38,66 @@ var ASSETS = [
   "assets/img/screenshot-overview-high-contrast.png",
   "assets/img/screenshot-wizard-dark.png"
 ];
+// Files that must never be served stale while online (change every release).
+var FRESH = ["index.html", "styles.css", "app.js", "download.js", "network.js"];
+
+function isUsableResponse(response) {
+  return !!response && response.status === 200 && response.type === "basic";
+}
+
+function putInCache(request, response) {
+  caches.open(CACHE).then(function (cache) {
+    cache.put(request, response.clone());
+  });
+}
+
+// Network-first: fresh content when online, cached copy when offline.
+function networkFirst(request) {
+  return fetch(request).then(function (response) {
+    if (isUsableResponse(response)) {
+      putInCache(request, response);
+      // Keep the offline navigation entry in sync with the current page.
+      if (request.mode === "navigate") {
+        caches.open(CACHE).then(function (cache) {
+          cache.put("./", response.clone());
+        });
+      }
+    }
+    return response;
+  }).catch(function () {
+    return caches.match(request).then(function (cached) {
+      if (cached) {
+        return cached;
+      }
+      if (request.mode === "navigate") {
+        return caches.match("./");
+      }
+      throw new Error("offline: " + request.url);
+    });
+  });
+}
+
+// Cache-first with a background refresh (stale-while-revalidate).
+function cacheFirstRefresh(request) {
+  return caches.match(request).then(function (cached) {
+    if (cached) {
+      fetch(request).then(function (response) {
+        if (isUsableResponse(response)) {
+          putInCache(request, response);
+        }
+      }).catch(function () {});
+      return cached;
+    }
+    return fetch(request).then(function (response) {
+      if (isUsableResponse(response)) {
+        putInCache(request, response);
+      }
+      return response;
+    }).catch(function () {
+      throw new Error("offline: " + request.url);
+    });
+  });
+}
 
 self.addEventListener("install", function (event) {
   event.waitUntil(
@@ -77,32 +148,11 @@ self.addEventListener("fetch", function (event) {
   if (url.origin !== self.location.origin) {
     return;
   }
-  event.respondWith(
-    caches.match(request).then(function (cached) {
-      if (cached) {
-        // Cache-first: refresh the cached copy in the background.
-        fetch(request).then(function (response) {
-          if (response && response.status === 200 && response.type === "basic") {
-            caches.open(CACHE).then(function (cache) {
-              cache.put(request, response.clone());
-            });
-          }
-        }).catch(function () {});
-        return cached;
-      }
-      return fetch(request).then(function (response) {
-        if (response && response.status === 200 && response.type === "basic") {
-          caches.open(CACHE).then(function (cache) {
-            cache.put(request, response.clone());
-          });
-        }
-        return response;
-      }).catch(function () {
-        if (request.mode === "navigate") {
-          return caches.match("./");
-        }
-        throw new Error("offline: " + request.url);
-      });
-    })
-  );
+
+  var name = url.pathname.split("/").pop();
+  if (request.mode === "navigate" || FRESH.indexOf(name) !== -1) {
+    event.respondWith(networkFirst(request));
+    return;
+  }
+  event.respondWith(cacheFirstRefresh(request));
 });

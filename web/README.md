@@ -39,6 +39,17 @@ Over http(s), a service worker (`sw.js`) caches all assets on first visit, so
 subsequent visits — and reloads after the server is gone — work fully offline.
 `file://` needs no service worker: every asset is already a local file.
 
+Caching strategy (stale releases must never stick):
+
+- **Navigations + files that change every release** (`index.html`,
+  `styles.css`, `app.js`, `download.js`, `network.js`): **network-first** with
+  cache fallback. Online visitors always get the current page, and each
+  successful fetch refreshes the offline copy — no manual service-worker cache
+  bump is required when shipping a release.
+- **Everything else** (screenshots, favicons): **cache-first** with a
+  background refresh. Heavy assets load instantly; new screenshot filenames
+  are never stale.
+
 ## Publishing
 
 From the repo root: edit `web/*`, commit, then `make publish`. It copies this
