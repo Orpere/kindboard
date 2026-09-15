@@ -180,6 +180,19 @@ html[data-theme="light"] #theme-moon { display: block; }
 .hero-sub { max-width: 640px; color: var(--text-dim); font-size: 1.06rem; margin: 0 0 28px; }
 .hero-sub strong { color: var(--text); }
 .hero-actions { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 40px; }
+/* Author styles must not defeat the `hidden` attribute on the alt download
+   button (.btn sets display: inline-block, which would override the UA's
+   [hidden] { display: none }). */
+.hero-actions .btn[hidden] { display: none; }
+.platform-chips {
+  list-style: none; display: flex; gap: 4px 18px; flex-wrap: wrap;
+  flex-basis: 100%; margin: -2px 0 0; padding: 0;
+}
+.platform-chips a {
+  color: var(--text-dim); font-size: 0.8rem; text-decoration: none;
+  border-bottom: 1px solid transparent; transition: color 0.15s ease, border-color 0.15s ease;
+}
+.platform-chips a:hover { color: var(--accent); border-bottom-color: var(--accent); }
 .hero-stats {
   list-style: none; display: flex; gap: 44px; margin: 0 0 8px; padding: 0; flex-wrap: wrap;
 }

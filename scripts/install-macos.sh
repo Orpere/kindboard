@@ -13,7 +13,10 @@
 #   2. downloads kindboard-darwin-<arch>.tar.gz + SHA256SUMS for that tag
 #   3. verifies the tarball sha256 against SHA256SUMS (sha256sum when
 #      present, else shasum -a 256 — macOS ships the latter)
-#   4. extracts to $HOME/.local/bin/kindboard (user-scoped, no sudo)
+#   4. extracts to $HOME/.local/bin/kindboard (user-scoped, no sudo) and
+#      verifies the binary is a 64-bit Mach-O of the right CPU arch — a
+#      wrong-platform download fails here with an actionable error, never
+#      as `zsh: exec format error` at first launch
 #   5. clears com.apple.quarantine (xattr -c): the release binary is
 #      ad-hoc signed (ADR-0018); Gatekeeper only evaluates files carrying
 #      com.apple.quarantine, so clearing it at install time means the
@@ -41,7 +44,7 @@ err() { # err <message> [exit-code]
 }
 
 usage() {
-    sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
 }
 
@@ -154,6 +157,42 @@ log "checksum verified: $ACTUAL"
 log "extracting $TARBALL"
 tar -xzf "$WORK_DIR/$TARBALL" -C "$WORK_DIR"
 [[ -f "$WORK_DIR/kindboard" ]] || err "tarball does not contain a 'kindboard' binary — refusing to install"
+
+# ---------------------------------------------------------------------------
+# 7b. Mach-O format guard — a wrong-platform tarball must fail HERE, with an
+# actionable message, never later as `zsh: exec format error` at launch.
+# ---------------------------------------------------------------------------
+
+# First 8 bytes of a 64-bit Mach-O (little-endian MH_MAGIC_64 + cputype):
+#   arm64   cffaedfe 0c000001   (CPU_TYPE_ARM64  0x0100000C)
+#   x86_64  cffaedfe 07000001   (CPU_TYPE_X86_64 0x01000007)
+MACHO_MAGIC_ARM64="cffaedfe0c000001"
+MACHO_MAGIC_X86_64="cffaedfe07000001"
+
+verify_macho() { # verify_macho <file> <arch>   (arch: arm64|x86_64)
+    local file="$1" arch="$2" head
+    command -v od >/dev/null 2>&1 || err "od not found — cannot verify the downloaded binary"
+    head="$(od -An -tx1 -N8 "$file" | tr -d ' \n')"
+    case "$head" in
+        cafebabe*|bebafeca*)
+            err "downloaded binary is a universal (fat) Mach-O — kindboard ships thin binaries; download the $arch tarball for your Mac from https://github.com/Orpere/kindboard/releases"
+            ;;
+        cffaedfe*|cefaedfe*)
+            if [[ "$arch" == "arm64" ]]; then
+                [[ "$head" == "$MACHO_MAGIC_ARM64" ]] \
+                    || err "downloaded binary is not an arm64 Mach-O (different CPU type) — you likely grabbed the Intel tarball; get the Apple Silicon one from https://github.com/Orpere/kindboard/releases"
+            else
+                [[ "$head" == "$MACHO_MAGIC_X86_64" ]] \
+                    || err "downloaded binary is not an x86_64 Mach-O (different CPU type) — you likely grabbed the Apple Silicon tarball; get the Intel one from https://github.com/Orpere/kindboard/releases"
+            fi
+            ;;
+        *)
+            err "downloaded file is not a macOS (Mach-O) binary — wrong platform tarball? expected kindboard-darwin-$arch.tar.gz from https://github.com/Orpere/kindboard/releases"
+            ;;
+    esac
+}
+
+verify_macho "$WORK_DIR/kindboard" "$ARCH"
 
 mkdir -p "$INSTALL_DIR"
 mv "$WORK_DIR/kindboard" "$DEST"

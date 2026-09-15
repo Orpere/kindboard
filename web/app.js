@@ -105,6 +105,41 @@
     });
   }
 
+  // OS-aware download button (resolver lives in download.js, loaded first).
+  // Failure is always a no-op: the button keeps its no-JS default href, which
+  // points at the releases page — never a wrong binary.
+  function wireDownloadButton() {
+    var btn = document.getElementById("download-btn");
+    if (!btn || !window.kindboardDownload) {
+      return;
+    }
+    var resolved;
+    try {
+      var nav = window.navigator || {};
+      resolved = window.kindboardDownload.resolve({
+        userAgent: nav.userAgent || "",
+        platform: nav.platform || "",
+        userAgentDataPlatform: (nav.userAgentData && nav.userAgentData.platform) || ""
+      });
+    } catch (e) {
+      return;
+    }
+    if (!resolved || !resolved.primary || resolved.fallback) {
+      return;
+    }
+    btn.href = resolved.primary.href;
+    btn.textContent = resolved.primary.label;
+    btn.setAttribute("rel", "noopener");
+    var alt = document.getElementById("download-btn-alt");
+    if (resolved.alt && alt) {
+      alt.href = resolved.alt.href;
+      alt.textContent = resolved.alt.label;
+      alt.setAttribute("rel", "noopener");
+      alt.removeAttribute("hidden");
+    }
+  }
+  wireDownloadButton();
+
   // Offline support: register the service worker on http(s) hosts.
   // file:// has no service worker support, but the site is already
   // fully self-contained there (all assets are local files).
