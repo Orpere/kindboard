@@ -248,10 +248,10 @@ sequenceDiagram
   opt cilium extras
     P->>C: Gateway API CRDs (server-side, before install); base install carries ingress/gateway/mesh values; hubble/clustermesh after
   end
-  P->>P: persist ClusterSpec (ADR-0006), emit Event::ClusterReady
+  P->>P: persist ClusterSpec (ADR-0011), emit Event::ClusterReady
 ```
 
-**Scale/delete-node (ADR-0002):** kind has **no** node add/remove commands (verified against `kind --help`). The flow is an explicit guided recreate: `persist spec → warn user (workload loss) → kind delete --name → kind create with new worker_count → re-provision CNI/ingress/cilium`. The stored spec is the only input; it is not mutated until the recreate succeeds.
+**Scale/delete-node (ADR-0011):** kind has **no** node add/remove commands (verified against `kind --help`). The flow is an explicit guided recreate: `persist spec → warn user (workload loss) → kind delete --name → kind create with new worker_count → re-provision CNI/ingress/cilium`. The stored spec is the only input; it is not mutated until the recreate succeeds.
 
 ## 5. Topology data model
 
@@ -298,7 +298,7 @@ pub enum NodeRole { ControlPlane, Worker }
 - **All paths** are `PathBuf` resolved against `dirs::data_local_dir()`; never string-joined with `/`.
 - **All external versions** flow through `DetectSpec::parse` into a `Version { major, minor, patch }` struct, never raw strings, so "is kind ≥ 0.20?" is a typed comparison.
 - **Idempotency:** `kind create` fails if the cluster exists (`Error::ClusterExists`) — the app pre-checks `kind get clusters`. `helm install` is `helm upgrade --install` for idempotent re-runs. `cilium install` is idempotent (helm under the hood).
-- **Atomic writes** everywhere (spec JSON, settings, kubeconfig) per ADR-0007; kubeconfig via `kube::config::Kubeconfig` (serde round-trip), never raw text munging.
+- **Atomic writes** everywhere (spec JSON, settings, kubeconfig) per ADR-0021; kubeconfig via `kube::config::Kubeconfig` (serde round-trip), never raw text munging.
 
 ## 7. Corrections to the brief (verified against current cilium-cli)
 

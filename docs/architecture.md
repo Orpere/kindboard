@@ -24,7 +24,7 @@ architecture is the answer to five constraints, in priority order:
    No shell interpolation (ADR-0009): every invocation is an args array, so
    there is no quoting-injection class of bug.
 3. **The real world wins over assumptions.** kind has no node add/remove
-   commands, so scaling is an explicit guided recreate (ADR-0002). Cilium's
+   commands, so scaling is an explicit guided recreate (ADR-0011). Cilium's
    Gateway API controller requires kube-proxy replacement, so Cilium clusters
    render kind `networking.kubeProxyMode: none` and install with
    `kubeProxyReplacement=true` ([§9](#9-live-e2e-verification-2026-09-13),
@@ -114,14 +114,14 @@ graph LR
 - `CmdBus` is the single seam between UI and core — and therefore the single
   place to inject fakes in tests.
 - Kubeconfig writes are isolated to the `kubecfg` module and always go through
-  atomic write + `.bak` (ADR-0007): a crash mid-write cannot corrupt
+  atomic write + `.bak` (ADR-0021): a crash mid-write cannot corrupt
   `~/.kube/config`.
 - Log ring buffers are isolated per-cluster files; a runaway log stream is
   bounded by ring capacity (ADR-0012), never by UI memory.
 
 ## 3. Crate & module layout
 
-Two crates, one seam (ADR-0001, ADR-0008). Core is the universe of risk; the
+Two crates, one seam (ADR-0008). Core is the universe of risk; the
 app is its remote control.
 
 ### 3.1 `kindboard-core` (library — UI-free, `#![forbid(unsafe_code)]`)
@@ -134,9 +134,9 @@ The tokio runtime is *owned by core* ([§4](#4-async-model)).
 | `spec` | `ClusterSpec` + CNI/ingress/cilium enums; validation; (de)serialization; spec→kind-config generation | `ClusterSpec`, `Cni`, `IngressController`, `CiliumOptions`, `KindConfig` |
 | `exec` | `tokio::process` wrapper: args-only spawn, cancellation, streaming stdout/stderr, timeouts, env (ADR-0009) | `Cmd`, `CmdOutput`, `ProcessHandle` |
 | `kindctl` | Every kind/docker/kubectl/helm/cilium invocation as a typed enum; list/adopt clusters; version detection | `KindCommand` |
-| `provision` | Create/destroy flow, CNI/ingress/cilium install, scale=recreate (ADR-0002), provisioning order matrix, kernel-aware Cilium version selection (ADR-0014), kube-proxy replacement + Gateway API CRD ordering (ADR-0015) | `CreatePlan`, `ProvisionStep` |
-| `kubeconfig` | Merge/remove contexts via `kube::config::Kubeconfig` + atomic write + `.bak`; adopt-verification (ADR-0007) | `KubeconfigStore` |
-| `deps` | Detect/install dependency tools; registry of recipes (ADR-0003) | `Tool`, `ToolStatus`, `InstallRecipe` |
+| `provision` | Create/destroy flow, CNI/ingress/cilium install, scale=recreate (ADR-0011), provisioning order matrix, kernel-aware Cilium version selection (ADR-0014), kube-proxy replacement + Gateway API CRD ordering (ADR-0015) | `CreatePlan`, `ProvisionStep` |
+| `kubeconfig` | Merge/remove contexts via `kube::config::Kubeconfig` + atomic write + `.bak`; adopt-verification (ADR-0021) | `KubeconfigStore` |
+| `deps` | Detect/install dependency tools; registry of recipes | `Tool`, `ToolStatus`, `InstallRecipe` |
 | `topology` | Poll/watch k8s API into a typed topology model; layered-DAG layout (ADR-0010/0011) | `TopologyGraph`, `Workload`, `Pod`, … |
 | `logs` | Bounded ring buffers, follow mode, source selection docker vs kubectl (ADR-0012) | `LogRing`, `LogSource` |
 | `state` | Persistence dir layout, settings, per-cluster spec store, crash-safe JSON writes | `DataDir`, `Settings` |
@@ -258,14 +258,14 @@ root used for detached-mode log files (ADR-0013).
 kindboard/
 ├── settings.json                 # window state, preferred CNI/ingress defaults, poll interval
 ├── clusters/
-│   └── <name>.json               # ClusterSpec as-created (source of truth for recreate) — ADR-0006
+│   └── <name>.json               # ClusterSpec as-created (source of truth for recreate) — ADR-0011
 ├── logs/
 │   └── <name>/<source>.ring      # bounded ring buffer, one per (cluster, log source) — ADR-0012
 └── tmp/                           # staging for atomic writes; cleaned on start
 ```
 
 Writes are **atomic everywhere**: serialize to `tmp/`, `fsync`, rename over
-target; keep `.bak` for the previous kubeconfig only (ADR-0007). Spec JSON
+target; keep `.bak` for the previous kubeconfig only (ADR-0021). Spec JSON
 files are small and written once on create + on spec edits; a failed recreate
 never mutates the stored spec until the new cluster is up.
 
@@ -278,7 +278,7 @@ never mutates the stored spec until the new cluster is up.
 | User cancels a create/recreate | `Command::Cancel` | cooperative cancel, same TERM→KILL ladder → `Error::Cancelled`; stored spec untouched |
 | `kind create` on existing cluster | `kind get clusters` pre-check | `Error::ClusterExists`, skip |
 | CNI/ingress install fails mid-flow | step verification fails | roll forward: re-run the idempotent step (helm `upgrade --install`); the cilium flow is a single `cilium install` carrying all values — no post-install release upgrades (ADR-0015); on repeated failure, surface `Error::Command` + offer "destroy cluster" |
-| kubeconfig write interrupted | atomic write + `.bak` | previous file intact; repair on next start (ADR-0007) |
+| kubeconfig write interrupted | atomic write + `.bak` | previous file intact; repair on next start (ADR-0021) |
 | Cluster deleted outside app | reconciliation tick (`kind get clusters`) | classify `Missing`; offer recreate from spec, never auto-recreate (ADR-0011) |
 | Drift (worker count/version changed externally) | live props vs stored spec | `Error::Drift` surfaced; user-confirmed reconcile |
 | Bad user input (CIDR, name, ports) | `spec::validate` before any command | `Error::InvalidSpec`, fail fast, no side effects |
@@ -292,7 +292,7 @@ Design-time facts, checked against the tools' own source and release pages
 rather than assumed:
 
 - `kind --help` surface: `build/create/delete/export/get/load/version` only —
-  no node add/remove (confirms ADR-0002).
+  no node add/remove (confirms ADR-0011).
 - kind v1alpha4 field names from `pkg/apis/config/v1alpha4/types.go` (main).
 - kind default node image `kindest/node:v1.37.0` from `defaults/image.go`.
 - cilium CLI flag set from `cilium-cli` `cli/install.go`, `cli/hubble.go`,

@@ -35,7 +35,7 @@ make deny       # licenses / bans / sources / advisories against deny.toml (carg
    Docker daemon are present.
 5. **ADR for decisions.** Anything that changes how the system works —
    architecture, security posture, release process — gets a short ADR in
-   `docs/adrs/` (see ADR-0001 for the format).
+   `docs/adrs/` (see docs/adrs/ADR-0008.md for the format).
 6. **Security findings** go through the private advisory process — see
    [SECURITY.md](SECURITY.md).
 

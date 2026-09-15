@@ -96,7 +96,7 @@ style, and persisting everything crash-safely.
 > **Scaling note:** kind fixes the node topology at creation time. kindboard
 > implements "scale workers" / "delete node" as a one-click *guided recreate*
 > that preserves all cluster settings, with an explicit workload-loss warning —
-> the only safe way to resize a kind cluster (ADR-0002, verified against kind
+> the only safe way to resize a kind cluster (ADR-0011, verified against kind
 > upstream).
 
 ## Quick start
