@@ -68,6 +68,9 @@ pub struct Palette {
     pub tooltip_text: Color32,// diagram tooltip text (was WHITE, diagram.rs:299/310)
     pub service_fill: Color32,// diagram service fill (was rgba 0x5b8db8 @ 40/255, diagram.rs:356)
     pub ingress_fill: Color32,// diagram ingress fill (was rgba 0x8d7ab8 @ 40/255, diagram.rs:361)
+    // --- hover (ADR-0022) ---
+    pub hover_fill: Color32,  // fill behind hovered widgets (egui buttons paint weak_bg_fill)
+    pub hover_text: Color32,  // gray hover text, ≥4.5:1 on hover_fill in every theme
     // --- per-theme dim behavior ---
     dim_lighten: f32,         // 0.0 → darken path (Dark); >0 → lighten toward white
 }
@@ -144,6 +147,8 @@ Internal (private) implementation notes:
 | node_text | `0xd6e4ee` | `0x2b333b` | `0xffffff` |
 | tooltip_bg | `black_alpha(220)` | `black_alpha(230)` | `black` (opaque) |
 | tooltip_text | `WHITE` | `WHITE` | `WHITE` |
+| hover_fill | `0x27323d` | `0xdce3ea` | `0x1a1a1a` |
+| hover_text | `0xc6cfd9` | `0x37424d` | `0xd3d9de` |
 | service_fill | `rgba(0x5b8db8, 40)` | `rgba(0x5b8db8, 36)` | `rgba(0x5b8db8, 60)` |
 | ingress_fill | `rgba(0x8d7ab8, 40)` | `rgba(0x8d7ab8, 36)` | `rgba(0x8d7ab8, 60)` |
 | dim_lighten | 0.0 (darken `/5`) | 0.80 (lighten) | 0.0 (`/2` via HighContrast) |
@@ -456,13 +461,20 @@ mechanism below also works at 600×400 if product later wants to go lower —
 User rule: **letters must always be visible on buttons and highlighted
 components**, in every theme. Implemented as:
 
-1. **Widget fg strokes** (in `apply_theme`): `widgets.hovered.bg_fill = accent`,
-   `widgets.active.bg_fill = accent_hover` (darker than the accent), both with
-   `fg_stroke = Stroke(1.0, pal.on_accent)`. `accent_hover` values are chosen
-   so the on-accent text keeps **≥4.4:1** on every fill in every theme
-   (measured: hovered dark 7.06 / light 4.44 / HC 6.72; active dark 4.85 /
-   light 5.78 / HC 7.58). `open` (combo boxes) keeps its default fill AND
-   default text — no fg override (a white-on-grey combo would be invisible).
+1. **Widget fg strokes** (in `apply_theme`): hover is a *neutral* state —
+   `widgets.hovered.bg_fill = widgets.hovered.weak_bg_fill = pal.hover_fill`
+   with `fg_stroke = Stroke(1.0, pal.hover_text)` (a gray, **≥4.5:1** on its
+   fill in every theme — measured dark 8.3 / light 7.9 / HC 12.2). The
+   `weak_bg_fill` write is the critical one: egui buttons/selectable labels
+   paint their hover fill from `weak_bg_fill`, not `bg_fill`, so an accent
+   fill paired with `on_accent` text was never actually painted for buttons
+   (white letters on a default light-gray fill — ADR-0022). The pressed
+   state keeps the brand look: `widgets.active.bg_fill =
+   widgets.active.weak_bg_fill = accent_hover` (darker than the accent) with
+   `fg_stroke = Stroke(1.0, pal.on_accent)` — on-accent text keeps **≥4.4:1**
+   on `accent_hover` in every theme (measured: active dark 4.85 / light 5.78 /
+   HC 7.58). `open` (combo boxes) keeps its default fill AND default text —
+   no fg override (a white-on-grey combo would be invisible).
    `inactive`/`noninteractive` keep the base `Visuals::dark()/light()` text
    colors (readable on `bg_raised`/`bg`).
 2. **Selection text** (egui 0.36): `Selection` has no `fg_stroke` — the

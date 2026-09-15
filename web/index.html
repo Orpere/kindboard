@@ -28,7 +28,7 @@
         <strong>O.R.P</strong>
         <small>Orlando Rosa Pereira</small>
       </span>
-      <span class="brand-version">kindboard v0.1.10</span>
+      <span class="brand-version">kindboard v0.1.11</span>
     </a>
     <button class="nav-toggle" id="nav-toggle" aria-expanded="false" aria-controls="site-nav" aria-label="Toggle navigation">
       <span></span><span></span><span></span>
@@ -65,15 +65,15 @@
         you can read. Built as study work for everyone learning Kubernetes and DevOps.
       </p>
       <div class="hero-actions">
-        <a id="download-btn" class="btn btn-accent" rel="noopener" href="https://github.com/Orpere/kindboard/releases/latest">Download v0.1.10</a>
+        <a id="download-btn" class="btn btn-accent" rel="noopener" href="https://github.com/Orpere/kindboard/releases/latest">Download v0.1.11</a>
         <a id="download-btn-alt" class="btn btn-ghost" rel="noopener" hidden>macOS Intel</a>
         <a class="btn btn-ghost" href="#start">Get started</a>
         <a class="btn btn-ghost" href="#screenshots">See it in action</a>
         <ul class="platform-chips" role="list" aria-label="Download by platform">
-          <li><a rel="noopener" href="https://github.com/Orpere/kindboard/releases/download/v0.1.10/kindboard-linux-x86_64.tar.gz">Linux x86_64</a></li>
-          <li><a rel="noopener" href="https://github.com/Orpere/kindboard/releases/download/v0.1.10/kindboard-darwin-arm64.tar.gz">macOS Apple Silicon</a></li>
-          <li><a rel="noopener" href="https://github.com/Orpere/kindboard/releases/download/v0.1.10/kindboard-darwin-x86_64.tar.gz">macOS Intel</a></li>
-          <li><a rel="noopener" href="https://github.com/Orpere/kindboard/releases/download/v0.1.10/kindboard-windows-x86_64.zip">Windows x64</a></li>
+          <li><a rel="noopener" href="https://github.com/Orpere/kindboard/releases/download/v0.1.11/kindboard-linux-x86_64.tar.gz">Linux x86_64</a></li>
+          <li><a rel="noopener" href="https://github.com/Orpere/kindboard/releases/download/v0.1.11/kindboard-darwin-arm64.tar.gz">macOS Apple Silicon</a></li>
+          <li><a rel="noopener" href="https://github.com/Orpere/kindboard/releases/download/v0.1.11/kindboard-darwin-x86_64.tar.gz">macOS Intel</a></li>
+          <li><a rel="noopener" href="https://github.com/Orpere/kindboard/releases/download/v0.1.11/kindboard-windows-x86_64.zip">Windows x64</a></li>
         </ul>
       </div>
       <ul class="hero-stats" role="list">
@@ -361,11 +361,11 @@
     <div class="wrap narrow">
       <h2>Get started</h2>
       <p class="section-sub">You need Linux, macOS or Windows and a working Docker daemon. kindboard detects the rest. Download the
-        <a href="https://github.com/Orpere/kindboard/releases/download/v0.1.10/kindboard-linux-x86_64.tar.gz">v0.1.10 tarball (Linux x86_64)</a>,
-        <a href="https://github.com/Orpere/kindboard/releases/download/v0.1.10/kindboard-darwin-arm64.tar.gz">v0.1.10 tarball (macOS Apple Silicon)</a>,
-        <a href="https://github.com/Orpere/kindboard/releases/download/v0.1.10/kindboard-darwin-x86_64.tar.gz">v0.1.10 tarball (macOS Intel)</a> or
-        <a href="https://github.com/Orpere/kindboard/releases/download/v0.1.10/kindboard-windows-x86_64.zip">v0.1.10 zip (Windows x64)</a>,
-        verify against the <a href="https://github.com/Orpere/kindboard/releases/download/v0.1.10/SHA256SUMS">SHA256SUMS</a>,
+        <a href="https://github.com/Orpere/kindboard/releases/download/v0.1.11/kindboard-linux-x86_64.tar.gz">v0.1.11 tarball (Linux x86_64)</a>,
+        <a href="https://github.com/Orpere/kindboard/releases/download/v0.1.11/kindboard-darwin-arm64.tar.gz">v0.1.11 tarball (macOS Apple Silicon)</a>,
+        <a href="https://github.com/Orpere/kindboard/releases/download/v0.1.11/kindboard-darwin-x86_64.tar.gz">v0.1.11 tarball (macOS Intel)</a> or
+        <a href="https://github.com/Orpere/kindboard/releases/download/v0.1.11/kindboard-windows-x86_64.zip">v0.1.11 zip (Windows x64)</a>,
+        verify against the <a href="https://github.com/Orpere/kindboard/releases/download/v0.1.11/SHA256SUMS">SHA256SUMS</a>,
         or build from source. Building on macOS (<code>make run</code>, or <code>make mac-app</code> for a double-clickable app) runs with no Gatekeeper prompts at all; or <code>make mac-run</code> to fetch the prebuilt signed binary — no Xcode tools, no Gatekeeper prompt, no Apple account. On Windows, <code>scripts\install-windows.ps1 -Run</code> installs without admin and launches with no SmartScreen prompt. The right-click <em>Open</em> step applies only to downloaded release binaries — on first launch, if Gatekeeper warns, right-click the binary and choose <em>Open</em>.</p>
       <div class="code-block">
         <div class="code-head"><span>shell</span></div>
@@ -403,6 +403,7 @@ cargo build --release
         <div class="tl-item"><span class="tl-dot done"></span><div><h3>v0.1.8</h3><p>OS-aware download button (right binary for your platform, every time) + Mach-O guard in the macOS installer.</p></div></div>
         <div class="tl-item"><span class="tl-dot done"></span><div><h3>v0.1.9</h3><p>macOS rendering fix: OpenGL (glow) backend on macOS — text no longer vanishes on hover.</p></div></div>
         <div class="tl-item"><span class="tl-dot done"></span><div><h3>v0.1.10</h3><p>Dependency installer: reliable detection (no false "not installed"), install-only-if-needed, Installed buttons.</p></div></div>
+        <div class="tl-item"><span class="tl-dot done"></span><div><h3>v0.1.11</h3><p>Hover text is now gray on a neutral fill — readable on every theme (dark, light and high contrast).</p></div></div>
         <div class="tl-item"><span class="tl-dot next"></span><div><h3>Next</h3><p>Multi-cluster views, Helm chart library, and your feedback.</p></div></div>
       </div>
     </div>

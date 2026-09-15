@@ -106,6 +106,16 @@ pub struct Palette {
     pub text_dim: Color32,
     /// Extreme background (text edits, scrollbars).
     pub extreme_bg: Color32,
+    // --- hover (ADR-0022) ---
+    /// Fill behind hovered widgets. Buttons/selectable labels paint this
+    /// via egui's `widgets.hovered.weak_bg_fill`, which must match the
+    /// hover text below (egui paints button fills from `weak_bg_fill`,
+    /// not `bg_fill`).
+    pub hover_fill: Color32,
+    /// Text of hovered widgets: a gray readable on `hover_fill` in every
+    /// theme (never the accent-on color, which turns white on light
+    /// themes — ADR-0022).
+    pub hover_text: Color32,
     // --- diagram-only colors (promoted from hardcoded values) ---
     /// Diagram node label text (was `0xd6e4ee`).
     pub node_text: Color32,
@@ -163,6 +173,8 @@ const fn dark() -> Palette {
         canvas_bg: Color32::from_rgb(0x0e, 0x12, 0x17),
         text_dim: Color32::from_rgb(0x9a, 0xa6, 0xb4),
         extreme_bg: Color32::from_rgb(0x0a, 0x0d, 0x11),
+        hover_fill: Color32::from_rgb(0x27, 0x32, 0x3d),
+        hover_text: Color32::from_rgb(0xc6, 0xcf, 0xd9),
         node_text: Color32::from_rgb(0xd6, 0xe4, 0xee),
         tooltip_bg: Color32::from_black_alpha(220),
         tooltip_text: Color32::WHITE,
@@ -189,6 +201,8 @@ const fn light() -> Palette {
         canvas_bg: Color32::from_rgb(0xee, 0xf1, 0xf5),
         text_dim: Color32::from_rgb(0x5a, 0x66, 0x72),
         extreme_bg: Color32::from_rgb(0xe6, 0xea, 0xf0),
+        hover_fill: Color32::from_rgb(0xdc, 0xe3, 0xea),
+        hover_text: Color32::from_rgb(0x37, 0x42, 0x4d),
         node_text: Color32::from_rgb(0x2b, 0x33, 0x3b),
         tooltip_bg: Color32::from_black_alpha(230),
         tooltip_text: Color32::WHITE,
@@ -215,6 +229,8 @@ const fn high_contrast() -> Palette {
         canvas_bg: Color32::from_rgb(0x00, 0x00, 0x00),
         text_dim: Color32::from_rgb(0xcf, 0xd8, 0xdc),
         extreme_bg: Color32::from_rgb(0x00, 0x00, 0x00),
+        hover_fill: Color32::from_rgb(0x1a, 0x1a, 0x1a),
+        hover_text: Color32::from_rgb(0xd3, 0xd9, 0xde),
         node_text: Color32::from_rgb(0xff, 0xff, 0xff),
         tooltip_bg: Color32::from_black_alpha(255),
         tooltip_text: Color32::WHITE,
@@ -304,14 +320,19 @@ fn apply_theme(ctx: &egui::Context, id: ThemeId) {
     visuals.widgets.inactive.bg_fill = pal.bg_raised;
     visuals.widgets.inactive.weak_bg_fill = pal.bg_raised;
     visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, pal.stroke);
-    visuals.widgets.hovered.bg_fill = pal.accent;
+    visuals.widgets.hovered.weak_bg_fill = pal.hover_fill;
+    visuals.widgets.hovered.bg_fill = pal.hover_fill;
     visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, pal.accent);
+    visuals.widgets.active.weak_bg_fill = pal.accent_hover;
     visuals.widgets.active.bg_fill = pal.accent_hover;
     visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, pal.accent);
-    // R8: hovered/active widgets use accent fills — pair the text color so
-    // labels never disappear into the fill, in any theme. `open` (combo
-    // boxes) keeps its default fill, so its default text color is kept.
-    visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, pal.on_accent);
+    // R8 + ADR-0022: hover text is a gray paired with `hover_fill` (the
+    // fill egui actually paints for buttons via `weak_bg_fill`), so labels
+    // never disappear on hover, in any theme. The active (pressed) state
+    // keeps the darker accent fill, so `on_accent` text stays legible on it
+    // (measured ≥ 4.4:1). `open` (combo boxes) keeps its default fill, so
+    // its default text color is kept.
+    visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, pal.hover_text);
     visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, pal.on_accent);
     visuals.extreme_bg_color = pal.extreme_bg;
 
@@ -402,6 +423,56 @@ mod tests {
         }
     }
 
+    /// Relative luminance of an opaque color (ITU-R BT.709), the same
+    /// formula the theme contract uses to measure text contrast.
+    fn luminance(color: Color32) -> f64 {
+        let channel = |c: u8| {
+            let s = f64::from(c) / 255.0;
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(color.r()) + 0.7152 * channel(color.g()) + 0.0722 * channel(color.b())
+    }
+
+    /// WCAG contrast ratio between two opaque colors.
+    fn contrast(a: Color32, b: Color32) -> f64 {
+        let (hi, lo) = if luminance(a) >= luminance(b) {
+            (luminance(a), luminance(b))
+        } else {
+            (luminance(b), luminance(a))
+        };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    #[test]
+    fn hover_text_is_gray_and_readable_on_hover_fill_in_every_theme() {
+        // Regression (ADR-0022): hover text used to be `on_accent` (white on
+        // light themes) while egui painted button hover fills from the
+        // untouched `hovered.weak_bg_fill` — white letters on a light-gray
+        // fill. Hover text must be a gray with ≥ 4.5:1 (WCAG AA) on its own
+        // fill in every theme.
+        for id in ThemeId::ALL {
+            let pal = id.palette();
+            let ratio = contrast(pal.hover_text, pal.hover_fill);
+            assert!(
+                ratio >= 4.5,
+                "{:?}: hover_text {:?} on hover_fill {:?} = {:.2}:1 (need ≥ 4.5:1)",
+                id,
+                pal.hover_text,
+                pal.hover_fill,
+                ratio
+            );
+            // It must never be the accent-on color (the old white-letter bug).
+            assert_ne!(
+                pal.hover_text, pal.on_accent,
+                "{id:?}: hover_text must not reuse on_accent"
+            );
+        }
+    }
+
     #[test]
     fn settings_map_to_theme_with_dark_fallback() {
         // No settings at all → Dark.
@@ -457,6 +528,10 @@ mod tests {
             );
             assert_eq!(visuals.window_fill, dark_pal.bg_raised);
             assert_eq!(visuals.extreme_bg_color, dark_pal.extreme_bg);
+            // ADR-0022: hover fill (weak — the one buttons paint) + gray
+            // hover text must reach both theme slots.
+            assert_eq!(visuals.widgets.hovered.weak_bg_fill, dark_pal.hover_fill);
+            assert_eq!(visuals.widgets.hovered.fg_stroke.color, dark_pal.hover_text);
             assert_eq!(
                 ctx.style_of(theme).spacing.item_spacing,
                 egui::vec2(8.0, 8.0),
