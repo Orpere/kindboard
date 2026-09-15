@@ -168,7 +168,7 @@ impl KindboardApp {
         // gate still refuses tools that are already present.
         if let Some(want) = std::env::var("KINDBOARD_AUTO_INSTALL").ok()
             && let Some(tool) = kindboard_core::registry()
-                .into_iter()
+                .iter()
                 .find(|tool| tool.id.to_string() == want)
         {
             app.overview.deps.begin_install(tool.id);
