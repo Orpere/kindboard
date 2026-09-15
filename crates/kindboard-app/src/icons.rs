@@ -97,7 +97,9 @@ pub fn logo_image(ui: &mut Ui, id: ToolId, size: f32) -> bool {
         texture.id(),
         rect,
         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
-        Color32::WHITE,
+        // Theme-aware tint (ADR-0024): white lettering would vanish on light
+        // backgrounds; the palette picks a dark tint for light themes.
+        crate::theme::pal().logo_tint,
     );
     true
 }
@@ -141,7 +143,8 @@ pub fn brand_mark(ui: &mut Ui, size: f32) {
             texture.id(),
             rect,
             egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
-            Color32::WHITE,
+            // Theme-aware tint (ADR-0024), same rule as the tool logos.
+            crate::theme::pal().logo_tint,
         );
         return;
     }

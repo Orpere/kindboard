@@ -346,19 +346,26 @@ fn op_token(cancels: &mut HashMap<String, CancellationToken>, key: &str) -> Canc
 /// terminal outlives the app).
 fn open_k9s(name: &str, event_tx: &Sender<CoreEvent>) {
     let context = KubeconfigStore::kind_context_name(name);
-    let Some(terminal) = detect_terminal() else {
-        emit_important(
-            event_tx,
-            CoreEvent::Error {
-                context: "k9s".to_string(),
-                message:
-                    "no terminal emulator found (set $TERMINAL or install foot/kitty/alacritty)"
-                        .to_string(),
-            },
-        );
-        return;
+    // Resolution order (ADR-0023): `$TERMINAL` / known emulators on PATH,
+    // then the OS-default terminal, so k9s always opens a window on every
+    // supported OS.
+    let argv = match detect_terminal() {
+        Some(terminal) => k9s_argv(&terminal.to_string_lossy(), &context),
+        None if cfg!(target_os = "macos") => macos_default_argv(&context),
+        None if cfg!(windows) => windows_default_argv(&context),
+        None => {
+            emit_important(
+                event_tx,
+                CoreEvent::Error {
+                    context: "k9s".to_string(),
+                    message:
+                        "no terminal emulator found (set $TERMINAL or install foot/kitty/alacritty)"
+                            .to_string(),
+                },
+            );
+            return;
+        }
     };
-    let argv = k9s_argv(&terminal.to_string_lossy(), &context);
     match std::process::Command::new(&argv[0])
         .args(&argv[1..])
         .stdin(std::process::Stdio::null())
@@ -383,7 +390,7 @@ fn open_k9s(name: &str, event_tx: &Sender<CoreEvent>) {
             event_tx,
             CoreEvent::Error {
                 context: "k9s".to_string(),
-                message: format!("failed to open {}: {err}", terminal.display()),
+                message: format!("failed to open {}: {err}", argv[0]),
             },
         ),
     }
@@ -439,6 +446,66 @@ fn k9s_argv(terminal: &str, context: &str) -> Vec<String> {
         "k9s".to_string(),
         "--context".to_string(),
         context.to_string(),
+    ]
+}
+
+/// Quote a string for POSIX sh so it survives the shell unmodified. Always
+/// single-quoted: an embedded `'` becomes `'\''` (the only character that
+/// cannot appear literally inside single quotes).
+fn sh_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Escape a string for a double-quoted AppleScript string literal: `\` and
+/// `"` are the only characters that need escaping there.
+fn applescript_string_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// macOS default terminal (ADR-0023): Terminal.app driven by `osascript` —
+/// stock macOS has none of the PATH candidates, and `open -a Terminal`
+/// cannot carry a command. `do script` runs the string in a fresh Terminal
+/// window; the context is sh-quoted first, then AppleScript-escaped.
+///
+/// A pure helper (not cfg-gated) so it is unit-testable on any host; only
+/// the dispatch in `open_k9s` is `cfg!(target_os = "macos")`.
+fn macos_default_argv(context: &str) -> Vec<String> {
+    let command = applescript_string_escape(&format!("k9s --context {}", sh_single_quote(context)));
+    vec![
+        "osascript".to_string(),
+        "-e".to_string(),
+        format!("tell application \"Terminal\" to do script \"{command}\""),
+        "-e".to_string(),
+        "tell application \"Terminal\" to activate".to_string(),
+    ]
+}
+
+/// Quote a Windows command-line argument for `cmd /C start`: wrap it in `"`
+/// when it contains whitespace or quotes; a literal `"` becomes `\"` (the
+/// CommandLineToArgvW convention the launched program re-parses with).
+fn windows_quote(s: &str) -> String {
+    if s.contains([' ', '\t', '"']) {
+        format!("\"{}\"", s.replace('"', "\\\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// Windows default terminal (ADR-0023): `cmd /C start` opens the OS default
+/// console host (Windows Terminal / conhost) in a new window running k9s.
+/// The empty string after `start` is the window title (without it, `start`
+/// would consume the next quoted argument as the title).
+///
+/// A pure helper (not cfg-gated) for the same testability reason.
+fn windows_default_argv(context: &str) -> Vec<String> {
+    vec![
+        "cmd".to_string(),
+        "/C".to_string(),
+        "start".to_string(),
+        String::new(),
+        "k9s".to_string(),
+        "--context".to_string(),
+        windows_quote(context),
     ]
 }
 
@@ -1217,5 +1284,60 @@ mod tests {
         assert!(TERMINAL_CANDIDATES.contains(&"foot"));
         assert!(TERMINAL_CANDIDATES.contains(&"kitty"));
         assert!(TERMINAL_CANDIDATES.contains(&"alacritty"));
+    }
+
+    #[test]
+    fn macos_default_argv_drives_terminal_app_with_quoted_context() {
+        let argv = macos_default_argv("kind-demo");
+        assert_eq!(argv[0], "osascript");
+        assert_eq!(argv[1], "-e");
+        assert_eq!(argv[3], "-e");
+        assert_eq!(argv[4], "tell application \"Terminal\" to activate");
+        // The do-script string runs `k9s --context 'kind-demo'` via the
+        // Terminal shell: sh-quoted, then AppleScript-escaped.
+        assert!(argv[2].starts_with(
+            "tell application \"Terminal\" to do script \"k9s --context 'kind-demo'\""
+        ));
+    }
+
+    #[test]
+    fn macos_default_argv_escapes_shell_and_applescript_metacharacters() {
+        // A single quote must round-trip through sh single-quoting; the
+        // backslash is then doubled by the AppleScript-escape layer.
+        let argv = macos_default_argv("a'b");
+        assert!(
+            argv[2].contains("k9s --context 'a'\\\\''b'"),
+            "got: {}",
+            argv[2]
+        );
+
+        // Double quotes and backslashes must be escaped for the AppleScript
+        // string literal (which the sh layer keeps literal inside quotes).
+        let argv = macos_default_argv("a\"b\\c");
+        assert!(argv[2].contains("'a\\\"b\\\\c'"), "got: {}", argv[2]);
+    }
+
+    #[test]
+    fn windows_quote_wraps_only_when_needed() {
+        assert_eq!(windows_quote("kind-demo"), "kind-demo");
+        assert_eq!(windows_quote("my cluster"), "\"my cluster\"");
+        assert_eq!(windows_quote("tab\tsep"), "\"tab\tsep\"");
+        assert_eq!(windows_quote("a\"b"), "\"a\\\"b\"");
+    }
+
+    #[test]
+    fn windows_default_argv_opens_default_console_with_quoted_context() {
+        assert_eq!(
+            windows_default_argv("kind-demo"),
+            vec!["cmd", "/C", "start", "", "k9s", "--context", "kind-demo"]
+        );
+        let argv = windows_default_argv("my cluster");
+        assert_eq!(argv[0], "cmd");
+        assert_eq!(
+            argv[3], "",
+            "empty title keeps `start` from eating the command"
+        );
+        assert_eq!(argv[4], "k9s");
+        assert_eq!(argv[6], "\"my cluster\"");
     }
 }

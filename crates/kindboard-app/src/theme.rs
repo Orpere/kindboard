@@ -83,6 +83,10 @@ pub struct Palette {
     pub accent_hover: Color32,
     /// Text on the accent fill (always legible per R8).
     pub on_accent: Color32,
+    /// Tint for embedded logo images (tool logos + brand mark). White
+    /// lettering is invisible on light backgrounds, so light themes use a
+    /// dark tint instead (ADR-0024); must contrast with `bg` in every theme.
+    pub logo_tint: Color32,
     /// Healthy/ready state.
     pub green: Color32,
     /// Warning/pending state.
@@ -162,6 +166,7 @@ const fn dark() -> Palette {
         accent: Color32::from_rgb(0x3d, 0xa5, 0xd9),
         accent_hover: Color32::from_rgb(0x3d, 0x86, 0xad),
         on_accent: Color32::from_rgb(0x06, 0x0d, 0x12),
+        logo_tint: Color32::WHITE,
         green: Color32::from_rgb(0x4d, 0xc0, 0x64),
         amber: Color32::from_rgb(0xf0, 0xa5, 0x2e),
         red: Color32::from_rgb(0xe5, 0x53, 0x4b),
@@ -190,6 +195,7 @@ const fn light() -> Palette {
         accent: Color32::from_rgb(0x1b, 0x7f, 0xb2),
         accent_hover: Color32::from_rgb(0x18, 0x6c, 0x97),
         on_accent: Color32::from_rgb(0xff, 0xff, 0xff),
+        logo_tint: Color32::from_rgb(0x2f, 0x3a, 0x45),
         green: Color32::from_rgb(0x1f, 0x8a, 0x3d),
         amber: Color32::from_rgb(0xb3, 0x6b, 0x00),
         red: Color32::from_rgb(0xc0, 0x39, 0x2b),
@@ -218,6 +224,7 @@ const fn high_contrast() -> Palette {
         accent: Color32::from_rgb(0x1f, 0x9b, 0xd6),
         accent_hover: Color32::from_rgb(0x3d, 0xa5, 0xd9),
         on_accent: Color32::from_rgb(0x00, 0x00, 0x00),
+        logo_tint: Color32::WHITE,
         green: Color32::from_rgb(0x00, 0xc8, 0x53),
         amber: Color32::from_rgb(0xff, 0x98, 0x00),
         red: Color32::from_rgb(0xff, 0x3b, 0x30),
@@ -471,6 +478,39 @@ mod tests {
                 "{id:?}: hover_text must not reuse on_accent"
             );
         }
+    }
+
+    #[test]
+    fn logo_tint_contrasts_with_bg_in_every_theme() {
+        // Regression (ADR-0024): logos were tinted WHITE, which made the
+        // (mostly white) logo lettering invisible on the Light theme. The
+        // tint must contrast with the background in every theme (≥ 3:1 for
+        // large glyphs).
+        for id in ThemeId::ALL {
+            let pal = id.palette();
+            let ratio = contrast(pal.bg, pal.logo_tint);
+            assert!(
+                ratio >= 3.0,
+                "{:?}: logo_tint {:?} on bg {:?} = {:.2}:1 (need ≥ 3:1)",
+                id,
+                pal.logo_tint,
+                pal.bg,
+                ratio
+            );
+        }
+    }
+
+    #[test]
+    fn logo_tint_values_are_stable() {
+        // Dark/HighContrast keep white (dark backgrounds); Light uses a dark
+        // neutral so white logo lettering reads as dark on pale surfaces.
+        assert_eq!(ThemeId::Dark.palette().logo_tint, Color32::WHITE);
+        assert_eq!(ThemeId::HighContrast.palette().logo_tint, Color32::WHITE);
+        assert_eq!(
+            ThemeId::Light.palette().logo_tint,
+            Color32::from_rgb(0x2f, 0x3a, 0x45)
+        );
+        assert_ne!(ThemeId::Light.palette().logo_tint, Color32::WHITE);
     }
 
     #[test]
