@@ -1,0 +1,211 @@
+# kindboard — release pipeline (tag-triggered, e.g. `git tag v0.2.0 && git push --tags`).
+#
+# Produces, per release tag:
+#   - kindboard-linux-x86_64.tar.gz        (deterministic tarball, ubuntu)
+#   - kindboard-darwin-x86_64.tar.gz       (native build, macos-13)
+#   - kindboard-darwin-arm64.tar.gz        (native build, macos-14)
+#   - kindboard-windows-x86_64.zip         (native build, windows)
+#   - SHA256SUMS                           (all four artifacts)
+#   - cosign keyless signatures            (sign-blob, Fulcio/Rekor, ambient OIDC)
+#   - SLSA provenance attestation          (actions/attest-build-provenance)
+#   - SPDX SBOM (JSON)                     (anchore/sbom-action)
+#
+# Notes:
+#   - Artifact names match the local flow (scripts/build.sh → dist/) so the
+#     installers' SHA256SUMS lookups work unchanged.
+#   - Local `make release` remains available for offline/cross builds; it and
+#     this workflow are two producers of the same artifact contract.
+#   - The Windows zip from CI is not byte-reproducible (Compress-Archive
+#     timestamps); integrity comes from SHA256SUMS + cosign + attestation.
+#     Deterministic zips remain a local-build feature (scripts/build.sh).
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-linux:
+    name: linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # tag: v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # ref: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # tag: v2
+      - name: System deps (eframe/winit link requirements)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-dev libwayland-dev libxrandr-dev libxi-dev \
+            libx11-xcb-dev libxcb-xfixes0-dev libxcb-shape0-dev \
+            libxcb-xkb-dev libxcb-render-util0-dev libxcb-randr0-dev \
+            libxcb1-dev libxcb-keysyms1-dev libxcb-cursor-dev \
+            libgtk-3-dev libssl-dev pkg-config
+      - name: Build (release)
+        run: cargo build --release
+      - name: Pack deterministic tarball
+        run: |
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 \
+            --numeric-owner -czf kindboard-linux-x86_64.tar.gz \
+            -C target/release kindboard
+      - name: Smoke test
+        run: ./target/release/kindboard --version
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # tag: v4
+        with:
+          name: kindboard-linux-x86_64.tar.gz
+          path: kindboard-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  build-darwin-x86_64:
+    name: darwin x86_64 (macos-13)
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # tag: v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # ref: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # tag: v2
+      - name: Build (release)
+        run: cargo build --release
+      - name: Pack tarball
+        run: |
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 \
+            --numeric-owner -czf kindboard-darwin-x86_64.tar.gz \
+            -C target/release kindboard
+      - name: Smoke test
+        run: ./target/release/kindboard --version
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # tag: v4
+        with:
+          name: kindboard-darwin-x86_64.tar.gz
+          path: kindboard-darwin-x86_64.tar.gz
+          if-no-files-found: error
+
+  build-darwin-arm64:
+    name: darwin arm64 (macos-14)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # tag: v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # ref: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # tag: v2
+      - name: Build (release)
+        run: cargo build --release
+      - name: Pack tarball
+        run: |
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 \
+            --numeric-owner -czf kindboard-darwin-arm64.tar.gz \
+            -C target/release kindboard
+      - name: Smoke test
+        run: ./target/release/kindboard --version
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # tag: v4
+        with:
+          name: kindboard-darwin-arm64.tar.gz
+          path: kindboard-darwin-arm64.tar.gz
+          if-no-files-found: error
+
+  build-windows:
+    name: windows x86_64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # tag: v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # ref: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # tag: v2
+      - name: Build (release)
+        run: cargo build --release
+      - name: Smoke test
+        run: .\target\release\kindboard.exe --version
+      - name: Pack zip (member kindboard.exe)
+        shell: pwsh
+        run: |
+          Compress-Archive -Path .\target\release\kindboard.exe `
+            -DestinationPath kindboard-windows-x86_64.zip
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # tag: v4
+        with:
+          name: kindboard-windows-x86_64.zip
+          path: kindboard-windows-x86_64.zip
+          if-no-files-found: error
+
+  release:
+    name: sign · attest · publish
+    needs:
+      - build-linux
+      - build-darwin-x86_64
+      - build-darwin-arm64
+      - build-windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # tag: v4
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # tag: v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd release-assets
+          sha256sum \
+            kindboard-linux-x86_64.tar.gz \
+            kindboard-darwin-x86_64.tar.gz \
+            kindboard-darwin-arm64.tar.gz \
+            kindboard-windows-x86_64.zip \
+            > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # tag: v3
+
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # tag: v0
+        with:
+          format: spdx-json
+          output-file: release-assets/kindboard-sbom.spdx.json
+
+      - name: Sign artifacts (keyless, ambient GitHub OIDC)
+        run: |
+          cd release-assets
+          for f in kindboard-linux-x86_64.tar.gz \
+                   kindboard-darwin-x86_64.tar.gz \
+                   kindboard-darwin-arm64.tar.gz \
+                   kindboard-windows-x86_64.zip \
+                   SHA256SUMS \
+                   kindboard-sbom.spdx.json; do
+            cosign sign-blob --yes \
+              --output-signature "$f.sig" \
+              --output-certificate "$f.pem" \
+              "$f"
+          done
+
+      - name: Attest build provenance (SLSA)
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # tag: v2
+        with:
+          subject-path: |
+            release-assets/kindboard-linux-x86_64.tar.gz
+            release-assets/kindboard-darwin-x86_64.tar.gz
+            release-assets/kindboard-darwin-arm64.tar.gz
+            release-assets/kindboard-windows-x86_64.zip
+            release-assets/SHA256SUMS
+            release-assets/kindboard-sbom.spdx.json
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # tag: v2
+        with:
+          files: |
+            release-assets/kindboard-linux-x86_64.tar.gz
+            release-assets/kindboard-darwin-x86_64.tar.gz
+            release-assets/kindboard-darwin-arm64.tar.gz
+            release-assets/kindboard-windows-x86_64.zip
+            release-assets/SHA256SUMS
+            release-assets/kindboard-sbom.spdx.json
+            release-assets/*.sig
+            release-assets/*.pem
+          fail_on_unmatched_files: true
+          generate_release_notes: true

@@ -1,0 +1,126 @@
+# kindboard — CI quality gates (every push + every PR)
+#
+# Gates enforced:
+#   1. rustfmt        `cargo fmt --all --check`
+#   2. clippy         `cargo clippy --workspace --all-targets -- -D warnings`
+#   3. tests          `cargo test --workspace` (317 tests, no docker needed;
+#                     E2E self-skips unless KINDBOARD_E2E=1 + docker present)
+#   4. shellcheck     all scripts/*.sh (darwin-env.sh is a sourced-only pin
+#                     file: SC2148/SC2034 expected, excluded explicitly)
+#   5. release build  3-OS matrix (ubuntu / macOS x86_64+arm64 / Windows)
+#   6. smoke          `kindboard --version` (exits before any GUI init, so
+#                     it is safe on headless runners)
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    name: fmt · clippy · test · shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # tag: v4
+
+      - name: Install Rust (stable + components)
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # ref: stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # tag: v2
+
+      - name: System deps (eframe/winit link requirements)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-dev libwayland-dev libxrandr-dev libxi-dev \
+            libx11-xcb-dev libxcb-xfixes0-dev libxcb-shape0-dev \
+            libxcb-xkb-dev libxcb-render-util0-dev libxcb-randr0-dev \
+            libxcb1-dev libxcb-keysyms1-dev libxcb-cursor-dev \
+            libgtk-3-dev libssl-dev pkg-config
+
+      - name: Format check
+        run: cargo fmt --all --check
+
+      - name: Clippy (warnings denied)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
+
+      - name: Shellcheck (install)
+        run: sudo apt-get install -y shellcheck
+
+      - name: Shellcheck (scripts)
+        run: |
+          shellcheck -S warning \
+            -e SC2148 -e SC2034 scripts/darwin-env.sh
+          for f in scripts/*.sh; do
+            [ "$(basename "$f")" = "darwin-env.sh" ] && continue
+            shellcheck -S warning "$f"
+          done
+
+  build:
+    name: build (${{ matrix.os }})
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: kindboard-linux-x86_64
+          - os: macos-13
+            artifact: kindboard-darwin-x86_64
+          - os: macos-14
+            artifact: kindboard-darwin-arm64
+          - os: windows-latest
+            artifact: kindboard-windows-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # tag: v4
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # ref: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # tag: v2
+
+      - name: System deps (Linux only — eframe/winit link requirements)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-dev libwayland-dev libxrandr-dev libxi-dev \
+            libx11-xcb-dev libxcb-xfixes0-dev libxcb-shape0-dev \
+            libxcb-xkb-dev libxcb-render-util0-dev libxcb-randr0-dev \
+            libxcb1-dev libxcb-keysyms1-dev libxcb-cursor-dev \
+            libgtk-3-dev libssl-dev pkg-config
+
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Smoke test (--version exits before GUI init)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ./target/release/kindboard.exe --version
+          else
+            ./target/release/kindboard --version
+          fi
+
+      - name: Upload binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # tag: v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            target/release/kindboard
+            target/release/kindboard.exe
+          if-no-files-found: error
+          retention-days: 7

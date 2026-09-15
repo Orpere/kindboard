@@ -1,0 +1,44 @@
+# kindboard dependency policy — enforced by the `Security` workflow
+# (EmbarkStudios/cargo-deny-action) on every push/PR and weekly.
+#
+# The allowlist below was verified against the current Cargo.lock (503 crates)
+# via `cargo deny check` as of 2026-09-15. If a future dependency introduces a
+# license not listed here, the gate fails — that is intentional; review the
+# crate and either add its license deliberately or replace the dependency.
+
+[advisories]
+# Scope (cargo-deny >= 0.16): "all" = workspace + transitive deps.
+# Stricter than the defaults (unsound defaults to workspace-only).
+unmaintained = "all"
+unsound = "all"
+# Stricter than the default "warn": a yanked transitive dep fails the gate
+# until the lockfile is bumped — intentional, keeps releases reproducible.
+yanked = "deny"
+
+[licenses]
+confidence-threshold = 0.9
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "MPL-2.0",
+    "CC0-1.0",
+    "OpenSSL",
+    "BSL-1.0",              # clipboard-win / error-code
+    "OFL-1.1",              # epaint_default_fonts bundled fonts
+    "Ubuntu-font-1.0",      # epaint_default_fonts bundled fonts
+    "CDLA-Permissive-2.0",  # webpki-root-certs (Mozilla CCADB bundle)
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

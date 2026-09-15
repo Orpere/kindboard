@@ -14,7 +14,7 @@ name = "kindboard"
 path = "src/main.rs"
 
 [dependencies]
-kindboard-core = { path = "../kindboard-core" }
+kindboard-core = { path = "../kindboard-core", version = "0.1.14" }
 eframe = { version = "0.36", default-features = false, features = [
     "accesskit",
     "default_fonts",

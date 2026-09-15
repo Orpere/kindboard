@@ -7,6 +7,14 @@
   <meta name="description" content="kindboard is a Linux desktop app for creating, inspecting and managing local Kubernetes (kind) clusters — built in Rust for people learning Kubernetes and DevOps." />
   <meta name="theme-color" content="#12161c" />
   <meta name="author" content="Orlando Rosa Pereira" />
+  <!-- GitHub Pages cannot set HTTP headers, so the CSP lives in a meta tag.
+       The sha256 entry allowlists the inline theme-bootstrap script below
+       (recompute with `sha256sum` over the exact script bytes when it changes):
+       script-src 'self' <hash>; everything else same-origin only.
+       frame-ancestors is omitted: it is inert in a meta tag, so clickjacking
+       protection is unavailable on GitHub Pages and accepted as residual risk
+       for this static site. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-ahwJaGSx7KOVhxHUucJK3EvIXWV5ExNQpcqbF4LpwiA='; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'" />
   <meta property="og:title" content="kindboard — a desktop cockpit for kind clusters" />
   <meta property="og:description" content="Create, inspect and manage local Kubernetes clusters from a polished desktop UI. Rust + egui, one-click dependencies, live topology diagrams, Cilium + Gateway API support." />
   <meta property="og:type" content="website" />

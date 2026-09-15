@@ -14,6 +14,7 @@ leaves to you: **flannel, calico or Cilium** networking, **nginx, traefik or
 Cilium** ingress, Hubble observability, the Gateway API, and cluster mesh.
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
+![CI](https://github.com/Orpere/kindboard/actions/workflows/ci.yml/badge.svg)
 ![Rust](https://img.shields.io/badge/rust-1.98+-orange)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-9cf)
 
@@ -273,6 +274,20 @@ architecture, CNI matrix and screenshots for people studying Kubernetes and
 DevOps. Open `web/index.html` locally or serve the folder with any static
 server. (The GitHub links in the header/footer are placeholders — point them
 at your repository before publishing.)
+
+## Security
+
+Security vulnerabilities should be reported privately via
+[GitHub Security Advisories](https://github.com/Orpere/kindboard/security/advisories) —
+see [SECURITY.md](SECURITY.md) for the policy and supported versions, and
+[docs/threat-model.md](docs/threat-model.md) for the threat model.
+
+Every release is built in CI with quality and supply-chain gates
+(`.github/workflows/`): fmt/clippy/tests on 3 OSes, `cargo audit`,
+`cargo deny`, secret scanning, dependency review, keyless-signed artifacts,
+SLSA provenance, and an SPDX SBOM. All downloaded tools are pinned to a
+version **and** a SHA-256 digest verified against the upstream project's
+official checksums.
 
 ## License & attribution
 
