@@ -1,6 +1,6 @@
 [package]
 name = "kindboard-app"
-version = "0.1.14"
+version = "0.1.15"
 edition = "2024"
 license = "MIT"
 description = "kindboard desktop app: create, manage and inspect kind clusters"
@@ -14,7 +14,7 @@ name = "kindboard"
 path = "src/main.rs"
 
 [dependencies]
-kindboard-core = { path = "../kindboard-core", version = "0.1.14" }
+kindboard-core = { path = "../kindboard-core", version = "0.1.15" }
 eframe = { version = "0.36", default-features = false, features = [
     "accesskit",
     "default_fonts",
