@@ -31,6 +31,11 @@ pub struct DepsState {
     pub docker: Option<DockerDaemonState>,
     /// The running/last install (inline log area).
     pub install: Option<InstallUi>,
+    /// Id of the detection run this state tracks (0 = none). Events carrying
+    /// any other id belong to a superseded run and are ignored — overlapping
+    /// runs (startup + Refresh + watchdog re-issue) must never overwrite
+    /// fresh results with stale ones (D5).
+    pub run: u64,
 }
 
 /// Inline install log area state.
@@ -67,10 +72,19 @@ impl DepsState {
     /// Handle a deps-related event.
     pub fn handle_event(&mut self, event: &CoreEvent) {
         match event {
-            CoreEvent::DetectedTool { id, result } => {
+            CoreEvent::DetectedTool { id, run, result } => {
+                // Drop events from superseded detect runs: a newer run has
+                // already cleared (or is filling) `results`, and a stale
+                // outcome would read as a fresh one.
+                if *run != self.run {
+                    return;
+                }
                 self.results.insert(*id, result.clone());
             }
-            CoreEvent::ToolsDetectDone => {
+            CoreEvent::ToolsDetectDone { run } => {
+                if *run != self.run {
+                    return;
+                }
                 self.detecting = false;
                 self.detect_started = None;
                 self.detect_retries = 0;
@@ -125,12 +139,15 @@ impl DepsState {
     ///
     /// Clears previous results so stale statuses are never shown as fresh:
     /// rows without a result render as "checking…" until the new outcome
-    /// arrives (TRACE-013).
-    pub fn begin_detect(&mut self) {
+    /// arrives (TRACE-013). Returns the new run id — pass it to
+    /// [`CoreCommand::DetectTools`] so only this run's events are accepted.
+    pub fn begin_detect(&mut self) -> u64 {
+        self.run = self.run.wrapping_add(1);
         self.detecting = true;
         self.detect_started = Some(std::time::Instant::now());
         self.detect_retries = 0;
         self.results.clear();
+        self.run
     }
 
     /// Whether the current detection run has been running for at least
@@ -207,8 +224,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut DepsState, actions: &mut Vec<CoreComm
                 )
                 .on_hover_text("Re-run detection for all tools");
             if refresh.clicked() {
-                state.begin_detect();
-                actions.push(CoreCommand::DetectTools);
+                let run = state.begin_detect();
+                actions.push(CoreCommand::DetectTools { run });
                 actions.push(CoreCommand::CheckDockerDaemon);
             }
         });
@@ -304,12 +321,36 @@ pub fn show(ui: &mut egui::Ui, state: &mut DepsState, actions: &mut Vec<CoreComm
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let installing = matches!(&state.install, Some(install) if install.id == id && install.done.is_none());
-                let button = ui
-                    .add_enabled(!installing, egui::Button::new("Install"))
-                    .on_hover_text(format!("Install {} (package manager first, binary fallback)", tool.display));
-                if button.clicked() {
-                    state.begin_install(id);
-                    actions.push(CoreCommand::InstallTool { id });
+                // The button mirrors reality: installed tools get a disabled
+                // green "Installed" badge instead of a live Install button —
+                // an Install click can never re-run a plan for a present
+                // tool (the core pre-flight gate backs this up).
+                match state.results.get(&id) {
+                    Some(Ok(ToolStatus::Installed { version, path })) => {
+                        let label = if version.is_known() {
+                            format!("Installed v{}.{}.{}", version.major, version.minor, version.patch)
+                        } else {
+                            "Installed".to_string()
+                        };
+                        ui.add_enabled(
+                            false,
+                            egui::Button::new(RichText::new(label).color(theme::pal().green)),
+                        )
+                        .on_hover_text(format!(
+                            "{} is installed ({}) — no action needed",
+                            tool.display,
+                            path.display()
+                        ));
+                    }
+                    _ => {
+                        let button = ui
+                            .add_enabled(!installing, egui::Button::new("Install"))
+                            .on_hover_text(format!("Install {} (package manager first, binary fallback)", tool.display));
+                        if button.clicked() {
+                            state.begin_install(id);
+                            actions.push(CoreCommand::InstallTool { id });
+                        }
+                    }
                 }
             });
         });
@@ -403,11 +444,22 @@ mod tests {
     }
 
     #[test]
+    fn begin_detect_returns_monotonic_run_ids() {
+        let mut state = DepsState::default();
+        let first = state.begin_detect();
+        let second = state.begin_detect();
+        let third = state.begin_detect();
+        assert_eq!(first, 1);
+        assert!(second > first);
+        assert!(third > second);
+    }
+
+    #[test]
     fn detect_done_resets_watchdog_state() {
         let mut state = DepsState::default();
-        state.begin_detect();
+        let run = state.begin_detect();
         state.detect_retries = 2;
-        state.handle_event(&CoreEvent::ToolsDetectDone);
+        state.handle_event(&CoreEvent::ToolsDetectDone { run });
         assert!(!state.detecting);
         assert!(state.detect_started.is_none());
         assert_eq!(state.detect_retries, 0);
@@ -423,10 +475,12 @@ mod tests {
     #[test]
     fn detected_tool_updates_results() {
         let mut state = DepsState::default();
+        let run = state.begin_detect();
         let result: Result<kindboard_core::ToolStatus, String> =
             Ok(kindboard_core::ToolStatus::NotInstalled);
         state.handle_event(&CoreEvent::DetectedTool {
             id: kindboard_core::ToolId::Kubectx,
+            run,
             result: result.clone(),
         });
         assert_eq!(
@@ -436,15 +490,71 @@ mod tests {
     }
 
     #[test]
+    fn stale_run_events_are_ignored() {
+        // D5: overlapping detect runs (startup + Refresh + watchdog) must
+        // never let a superseded run overwrite fresh results or release the
+        // "checking…" state early.
+        let mut state = DepsState::default();
+        let first_run = state.begin_detect();
+        state.handle_event(&CoreEvent::DetectedTool {
+            id: kindboard_core::ToolId::Kind,
+            run: first_run,
+            result: Ok(kindboard_core::ToolStatus::NotInstalled),
+        });
+        assert_eq!(state.results.len(), 1);
+
+        let second_run = state.begin_detect();
+        assert!(state.results.is_empty(), "new run clears results");
+
+        // A late event from the first run must not pollute the second run.
+        state.handle_event(&CoreEvent::DetectedTool {
+            id: kindboard_core::ToolId::Kind,
+            run: first_run,
+            result: Ok(kindboard_core::ToolStatus::NotInstalled),
+        });
+        assert!(
+            state.results.is_empty(),
+            "stale DetectedTool must be ignored"
+        );
+
+        // Nor may a stale completion release the "checking…" state.
+        state.handle_event(&CoreEvent::ToolsDetectDone { run: first_run });
+        assert!(state.detecting, "stale ToolsDetectDone must be ignored");
+
+        // The current run's events still land and complete normally.
+        let installed = kindboard_core::ToolStatus::Installed {
+            version: kindboard_core::Version {
+                major: 0,
+                minor: 33,
+                patch: 0,
+            },
+            path: std::path::PathBuf::from("/usr/bin/kind"),
+        };
+        state.handle_event(&CoreEvent::DetectedTool {
+            id: kindboard_core::ToolId::Kind,
+            run: second_run,
+            result: Ok(installed.clone()),
+        });
+        state.handle_event(&CoreEvent::ToolsDetectDone { run: second_run });
+        assert_eq!(state.results.len(), 1);
+        assert_eq!(
+            state.results.get(&kindboard_core::ToolId::Kind),
+            Some(&Ok(installed))
+        );
+        assert!(!state.detecting);
+    }
+
+    #[test]
     fn begin_detect_clears_stale_results_and_resets_retries() {
         let mut state = DepsState::default();
-        state.begin_detect();
+        let run = state.begin_detect();
         state.detect_retries = 2;
         state.handle_event(&CoreEvent::DetectedTool {
             id: kindboard_core::ToolId::Kind,
+            run,
             result: Ok(kindboard_core::ToolStatus::NotInstalled),
         });
-        state.handle_event(&CoreEvent::ToolsDetectDone);
+        state.handle_event(&CoreEvent::ToolsDetectDone { run });
         assert_eq!(state.results.len(), 1);
 
         // A fresh run must not carry stale outcomes, and the retry budget

@@ -55,8 +55,15 @@ pub enum CoreCommand {
     /// Re-run `kind get clusters` + status probes + reconcile against the
     /// stored records.
     Reconcile,
-    /// Detect all registry tools.
-    DetectTools,
+    /// Detect all registry tools. The `run` id (UI-assigned, monotonic) is
+    /// echoed back on every `DetectedTool`/`ToolsDetectDone` event so the UI
+    /// can drop events from superseded runs — overlapping detect runs are
+    /// common (startup + Refresh + watchdog re-issue) and stale events
+    /// would otherwise overwrite fresh results.
+    DetectTools {
+        /// Detection run id.
+        run: u64,
+    },
     /// Probe the docker daemon.
     CheckDockerDaemon,
     /// Persist the selected theme id in settings.json.
@@ -184,11 +191,16 @@ pub enum CoreEvent {
     DetectedTool {
         /// Tool id.
         id: ToolId,
+        /// Detection run id (echoed from [`CoreCommand::DetectTools`]).
+        run: u64,
         /// Detection outcome.
         result: Result<ToolStatus, String>,
     },
     /// All tools finished detecting.
-    ToolsDetectDone,
+    ToolsDetectDone {
+        /// Detection run id (echoed from [`CoreCommand::DetectTools`]).
+        run: u64,
+    },
     /// Docker daemon probe finished.
     DockerDaemon {
         /// Daemon state.
@@ -367,7 +379,7 @@ mod tests {
 
         // The bus is full: the progress line is dropped, the notice waits
         // for the drainer to free a slot and is then delivered.
-        emit(&tx, CoreEvent::ToolsDetectDone);
+        emit(&tx, CoreEvent::ToolsDetectDone { run: 0 });
 
         std::thread::sleep(Duration::from_millis(500));
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -384,7 +396,7 @@ mod tests {
         assert!(
             !events
                 .iter()
-                .any(|event| matches!(event, CoreEvent::ToolsDetectDone)),
+                .any(|event| matches!(event, CoreEvent::ToolsDetectDone { .. })),
             "full-bus progress lines must be dropped"
         );
         assert_eq!(
@@ -414,7 +426,7 @@ mod tests {
         let drainer = spawn_drainer(rx, collected.clone(), stop.clone());
 
         // Outcome events briefly wait for a free slot instead of being lost.
-        emit_important(&tx, CoreEvent::ToolsDetectDone);
+        emit_important(&tx, CoreEvent::ToolsDetectDone { run: 0 });
 
         std::thread::sleep(Duration::from_millis(300));
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -424,7 +436,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|event| matches!(event, CoreEvent::ToolsDetectDone)),
+                .any(|event| matches!(event, CoreEvent::ToolsDetectDone { .. })),
             "outcome events must get through a full bus (grace wait)"
         );
     }

@@ -159,9 +159,9 @@ impl KindboardApp {
                 .filter(|value| !value.is_empty()),
         };
         app.overview.loading = true;
-        app.overview.deps.begin_detect();
+        let detect_run = app.overview.deps.begin_detect();
         app.issue(CoreCommand::Reconcile);
-        app.issue(CoreCommand::DetectTools);
+        app.issue(CoreCommand::DetectTools { run: detect_run });
         app.issue(CoreCommand::CheckDockerDaemon);
         app
     }
@@ -292,13 +292,13 @@ impl KindboardApp {
             CoreEvent::ClusterStatus { name, status } => {
                 self.overview.statuses.insert(name, status);
             }
-            CoreEvent::DetectedTool { .. } | CoreEvent::ToolsDetectDone => {}
+            CoreEvent::DetectedTool { .. } | CoreEvent::ToolsDetectDone { .. } => {}
             CoreEvent::DockerDaemon { .. } => {}
             CoreEvent::InstallEvent { .. } => {}
             CoreEvent::InstallDone { .. } => {
                 // Refresh every row with the post-install reality.
-                self.overview.deps.begin_detect();
-                self.issue(CoreCommand::DetectTools);
+                let detect_run = self.overview.deps.begin_detect();
+                self.issue(CoreCommand::DetectTools { run: detect_run });
             }
             CoreEvent::Provision {
                 name,
@@ -953,13 +953,13 @@ impl KindboardApp {
             if self.overview.deps.detect_stalled(DETECT_WATCHDOG) {
                 if self.overview.deps.detect_retries < DETECT_MAX_RETRIES {
                     self.overview.deps.detect_retries += 1;
-                    self.overview.deps.begin_detect();
+                    let detect_run = self.overview.deps.begin_detect();
                     log::warn!(
                         "tool detection stalled; re-running (attempt {}/{})",
                         self.overview.deps.detect_retries,
                         DETECT_MAX_RETRIES
                     );
-                    self.issue(CoreCommand::DetectTools);
+                    self.issue(CoreCommand::DetectTools { run: detect_run });
                 } else {
                     // Budget exhausted: release the UI instead of leaving
                     // Refresh disabled forever — the user can retry

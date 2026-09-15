@@ -317,23 +317,24 @@ pub struct Platform {
 
 /// Detect the current platform (OS + available package manager + pkexec).
 pub fn detect_platform() -> Platform {
+    let dirs = effective_path_entries();
     let os = match std::env::consts::OS {
         "linux" => OsKind::Linux,
         "macos" => OsKind::Macos,
         "windows" => OsKind::Windows,
         _ => OsKind::Other,
     };
-    let pkg_manager = if find_in_path(&path_entries(), "brew").is_some() {
+    let pkg_manager = if find_in_path(&dirs, "brew").is_some() {
         Some(PkgManager::Brew)
-    } else if find_in_path(&path_entries(), "dnf").is_some() {
+    } else if find_in_path(&dirs, "dnf").is_some() {
         Some(PkgManager::Dnf)
-    } else if find_in_path(&path_entries(), "apt-get").is_some() {
+    } else if find_in_path(&dirs, "apt-get").is_some() {
         Some(PkgManager::Apt)
-    } else if find_in_path(&path_entries(), "pacman").is_some() {
+    } else if find_in_path(&dirs, "pacman").is_some() {
         Some(PkgManager::Pacman)
-    } else if find_in_path(&path_entries(), "winget").is_some() {
+    } else if find_in_path(&dirs, "winget").is_some() {
         Some(PkgManager::Winget)
-    } else if find_in_path(&path_entries(), "choco").is_some() {
+    } else if find_in_path(&dirs, "choco").is_some() {
         Some(PkgManager::Choco)
     } else {
         None
@@ -341,7 +342,7 @@ pub fn detect_platform() -> Platform {
     Platform {
         os,
         pkg_manager,
-        pkexec: find_in_path(&path_entries(), "pkexec").is_some(),
+        pkexec: find_in_path(&dirs, "pkexec").is_some(),
     }
 }
 
@@ -351,6 +352,39 @@ pub fn path_entries() -> Vec<PathBuf> {
         None => Vec::new(),
         Some(path) => std::env::split_paths(&path).collect(),
     }
+}
+
+/// The PATH entries detection should search: the process PATH plus the
+/// directories a GUI-launched app commonly misses.
+///
+/// Desktop launchers hand apps a minimal PATH — binary fallbacks installed
+/// into `~/.local/bin` and (on macOS) Homebrew's `/opt/homebrew/bin` /
+/// `/usr/local/bin` are frequently absent from it. Detecting against the raw
+/// process PATH only therefore reports "not installed" for tools that are
+/// present — the classic false negative. Extending the search here (deduped,
+/// original order preserved) removes it; the version probe also runs with
+/// this extended PATH so a found binary resolves its own runtime the same
+/// way a user's shell would.
+pub fn effective_path_entries() -> Vec<PathBuf> {
+    let mut dirs = path_entries();
+    let mut push_missing = |dir: PathBuf| {
+        if !dirs.iter().any(|existing| existing == &dir) {
+            dirs.push(dir);
+        }
+    };
+    push_missing(local_bin_dir());
+    #[cfg(target_os = "macos")]
+    {
+        for brew in [
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/local/bin"),
+        ] {
+            if brew.is_dir() {
+                push_missing(brew);
+            }
+        }
+    }
+    dirs
 }
 
 /// Look `command` up in the given directories (PATH semantics: first match
@@ -422,7 +456,7 @@ pub fn local_bin_dir() -> PathBuf {
 /// The search uses the current PATH. Errors only for unexpected spawn
 /// failures; "not there" and "broken" are [`ToolStatus`] values.
 pub async fn detect(id: ToolId) -> Result<ToolStatus> {
-    detect_with_path(id, &path_entries()).await
+    detect_with_path(id, &effective_path_entries()).await
 }
 
 /// Like [`detect`], but with an explicit PATH (used by tests and after a
@@ -448,13 +482,33 @@ pub async fn detect_with_path(id: ToolId, search_path: &[PathBuf]) -> Result<Too
     let output = match cmd.run().await {
         Ok(output) => output,
         Err(err) => {
+            // A non-zero exit is not proof of absence: the binary IS on the
+            // search path. kubectx in particular is a POSIX shell script
+            // whose old releases have no `--version` flag and exit non-zero —
+            // presence on PATH is the signal there (the parse branch below
+            // can never fire for it). Anything else gets an honest `Broken`
+            // with the exit detail.
+            if tool.id == ToolId::Kubectx {
+                return Ok(ToolStatus::Installed {
+                    version: Version::UNKNOWN,
+                    path,
+                });
+            }
             return Ok(ToolStatus::Broken {
                 reason: err.to_string(),
             });
         }
     };
-    let text = output.stdout();
-    match parse_version(tool.detect.parse, &text) {
+    // Prefer stdout; when the version went to stderr (several CLIs log their
+    // version banner to stderr), fall back to the captured stderr tail
+    // instead of reporting a false "broken".
+    let stdout = output.stdout();
+    let text: &str = if stdout.trim().is_empty() {
+        output.stderr_tail.as_str()
+    } else {
+        stdout.as_str()
+    };
+    match parse_version(tool.detect.parse, text) {
         Some(version) => Ok(ToolStatus::Installed { version, path }),
         None => {
             if tool.id == ToolId::Kubectx {
@@ -535,7 +589,7 @@ fn parse_version3_at(text: &str, start: usize) -> Option<Version> {
 /// Missing binary → [`DockerDaemonState::BinaryMissing`]; present binary
 /// but failing/not-answering → [`DockerDaemonState::NotRunning`].
 pub async fn check_docker_daemon() -> DockerDaemonState {
-    check_docker_daemon_with_path(&path_entries()).await
+    check_docker_daemon_with_path(&effective_path_entries()).await
 }
 
 /// Like [`check_docker_daemon`] with an explicit PATH.
@@ -1105,11 +1159,50 @@ pub enum InstallEvent {
 /// Returns the post-install [`ToolStatus`] (re-detected) or the first
 /// failing step's error. `cancel` (optional) aborts between steps and kills
 /// the running step.
+///
+/// Install only if needed: a pre-flight detection gates the plan, so an
+/// already-installed tool runs zero steps (package managers exit non-zero
+/// with "already installed" otherwise, which read as a failure on a tool
+/// that is present). A failed step re-checks reality before reporting the
+/// failure, so a stale detection or an installer race can never produce a
+/// false "install failed".
 pub async fn install_with_progress(
     id: ToolId,
     cancel: Option<tokio_util::sync::CancellationToken>,
     tx: &mpsc::Sender<InstallEvent>,
 ) -> Result<ToolStatus> {
+    // A detect error must not block installation — installing is itself the
+    // repair path.
+    let preflight = match detect(id).await {
+        Ok(status) => status,
+        Err(err) => {
+            log::warn!("pre-install detect for {id} failed ({err}); installing anyway");
+            ToolStatus::NotInstalled
+        }
+    };
+    install_with_progress_preflighted(id, cancel, tx, preflight).await
+}
+
+/// [`install_with_progress`] with the pre-flight outcome supplied.
+///
+/// Test seam: unit tests inject [`ToolStatus::Installed`] and assert that
+/// zero plan steps run and the status round-trips untouched.
+async fn install_with_progress_preflighted(
+    id: ToolId,
+    cancel: Option<tokio_util::sync::CancellationToken>,
+    tx: &mpsc::Sender<InstallEvent>,
+    preflight: ToolStatus,
+) -> Result<ToolStatus> {
+    if let ToolStatus::Installed { .. } = preflight {
+        log::info!("dependency {id} already installed; skipping install plan");
+        let _ = tx
+            .send(InstallEvent::StepLine {
+                step: 0,
+                line: "already installed — nothing to do".to_string(),
+            })
+            .await;
+        return Ok(preflight);
+    }
     let plan = plan_install(id)?;
     log::info!("installing dependency {id}");
     let total = plan.steps.len();
@@ -1185,6 +1278,20 @@ pub async fn install_with_progress(
             }
             Err(err) => {
                 log::info!("failed to install dependency {id}");
+                // Reality check before reporting a failure: package managers
+                // exit non-zero with "already installed" when a stale
+                // detection or an installer race made us re-run them. If the
+                // tool is present, that is success — never a false failure.
+                if let Some(status) = reconcile_failure_recheck(detect(id).await) {
+                    let _ = tx
+                        .send(InstallEvent::StepLine {
+                            step: index,
+                            line: "install step failed, but the tool is present — treating as installed"
+                                .to_string(),
+                        })
+                        .await;
+                    return Ok(status);
+                }
                 let reason = match err {
                     crate::error::ExecError::Command {
                         code, stderr_tail, ..
@@ -1211,6 +1318,17 @@ pub async fn install_with_progress(
         }
     );
     Ok(status)
+}
+
+/// The policy for a failed install step: if the re-check finds the tool
+/// installed anyway (package-manager "already installed" race, stale
+/// detection, partially-completed plan), the failure is reconciled to
+/// success. Pure so the policy is unit-testable.
+fn reconcile_failure_recheck(recheck: Result<ToolStatus>) -> Option<ToolStatus> {
+    match recheck {
+        Ok(status @ ToolStatus::Installed { .. }) => Some(status),
+        _ => None,
+    }
 }
 
 fn step_timeout(step: &InstallStep) -> std::time::Duration {
@@ -1593,6 +1711,87 @@ mod tests {
             other => panic!("expected Installed, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn detect_kubectx_nonzero_exit_is_present_not_broken() {
+        // Old kubectx releases are POSIX scripts without --version: they exit
+        // non-zero, and presence on PATH is the only reliable signal. This
+        // must never surface as "broken" (false negative class D2).
+        let dir = temp_dir("kubectx-exit-stub");
+        make_stub(&dir, "kubectx", "exit 1");
+        let status = detect_with_path(ToolId::Kubectx, std::slice::from_ref(&dir))
+            .await
+            .unwrap();
+        match status {
+            ToolStatus::Installed { version, path } => {
+                assert_eq!(version, Version::UNKNOWN);
+                assert_eq!(path, dir.join("kubectx"));
+            }
+            other => panic!("expected Installed, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn detect_parses_version_from_stderr_when_stdout_is_empty() {
+        // Several CLIs print their version banner to stderr; stdout-only
+        // parsing would report a false "broken" (false negative class D3).
+        let dir = temp_dir("stderr-stub");
+        make_stub(&dir, "k9s", "echo 'Version 0.51.0' >&2");
+        let status = detect_with_path(ToolId::K9s, std::slice::from_ref(&dir))
+            .await
+            .unwrap();
+        match status {
+            ToolStatus::Installed { version, .. } => {
+                assert_eq!(
+                    version,
+                    Version {
+                        major: 0,
+                        minor: 51,
+                        patch: 0
+                    }
+                );
+            }
+            other => panic!("expected Installed, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn effective_path_includes_local_bin_dir_without_duplicates() {
+        // Binary fallbacks install into ~/.local/bin; a GUI-launched app
+        // must still see them (false negative class D1).
+        let dirs = effective_path_entries();
+        assert!(
+            dirs.contains(&local_bin_dir()),
+            "effective path must include {0}; got {dirs:?}",
+            local_bin_dir().display()
+        );
+        let mut seen = std::collections::HashSet::new();
+        for dir in &dirs {
+            assert!(
+                seen.insert(dir.clone()),
+                "duplicate path entry {0}",
+                dir.display()
+            );
+        }
+    }
+
+    #[test]
+    fn effective_path_keeps_original_order() {
+        let mut before = path_entries();
+        before.push(local_bin_dir());
+        let after = effective_path_entries();
+        // Every original entry survives, in its original position.
+        let mut idx = 0;
+        for entry in &after {
+            if idx < before.len() - 1 {
+                assert_eq!(entry, &before[idx]);
+                idx += 1;
+            }
+        }
+        assert!(idx >= before.len() - 1, "PATH entries were reordered");
     }
 
     // ---- docker daemon probe ----
@@ -2140,6 +2339,75 @@ mod tests {
             assert!(!cmd.argv().is_empty());
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn install_preflight_installed_skips_plan_and_reports_success() {
+        // Docker is pkg_manager_only with no binary fallback: on a host with
+        // no package manager, building the plan itself would fail. A
+        // successful skip therefore proves the plan is never built — the
+        // pre-flight gate runs first, zero steps execute (D4).
+        let (tx, mut rx) = mpsc::channel(8);
+        let installed = ToolStatus::Installed {
+            version: Version {
+                major: 29,
+                minor: 8,
+                patch: 0,
+            },
+            path: PathBuf::from("/usr/bin/docker"),
+        };
+        let result =
+            install_with_progress_preflighted(ToolId::Docker, None, &tx, installed.clone()).await;
+        drop(tx);
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        assert_eq!(result.unwrap(), installed);
+        assert_eq!(
+            events.len(),
+            1,
+            "pre-flight skip must emit exactly one line, got {events:?}"
+        );
+        match &events[0] {
+            InstallEvent::StepLine { step, line } => {
+                assert_eq!(*step, 0);
+                assert!(line.contains("already installed"), "{line}");
+            }
+            other => panic!("expected StepLine, got {other:?}"),
+        }
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, InstallEvent::StepStarted { .. })),
+            "no install step may run when the tool is already installed"
+        );
+    }
+
+    #[test]
+    fn reconcile_failure_recheck_turns_presence_into_success() {
+        let installed = ToolStatus::Installed {
+            version: Version::UNKNOWN,
+            path: PathBuf::from("/usr/bin/kind"),
+        };
+        assert_eq!(
+            reconcile_failure_recheck(Ok(installed.clone())),
+            Some(installed.clone())
+        );
+        assert_eq!(
+            reconcile_failure_recheck(Ok(ToolStatus::NotInstalled)),
+            None
+        );
+        assert_eq!(
+            reconcile_failure_recheck(Ok(ToolStatus::Broken {
+                reason: "still broken".to_string()
+            })),
+            None
+        );
+        assert_eq!(
+            reconcile_failure_recheck(Err(DepsError::NotFound("kind".to_string()).into())),
+            None
+        );
     }
 
     #[test]

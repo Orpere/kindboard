@@ -144,3 +144,20 @@ verification discipline). The binary fallback uses the bundled `curl.exe` +
 2. Install missing tools in dependency order: **docker first** (kind needs it), then **kind**, **kubectl**, **helm**, **cilium**, then optional **k9s/kubectx/kustomize**.
 3. After any `PATH`-changing install (`~/.local/bin`), re-run detection against the updated `PATH`.
 4. Docker daemon check is separate and repeated (daemon may start after install).
+
+## Detection semantics (implemented 2026-09-15, v0.1.10)
+
+- Detection searches an **effective PATH**: the process PATH plus `~/.local/bin`
+  (binary-fallback installs) and, on macOS, `/opt/homebrew/bin` +
+  `/usr/local/bin` when present — GUI-launched apps get a minimal PATH, and
+  raw-PATH-only detection produced false "not installed" results.
+- The version probe parses **stdout first, then the stderr tail** when stdout
+  is empty (several CLIs log their version banner to stderr).
+- A **non-zero exit is not absence**: kubectx (POSIX script; old releases have
+  no `--version`) reports *Installed* on presence alone; any other tool
+  reports *Broken* with the exit detail.
+- Installs are **idempotent and gated**: a pre-flight detection skips the
+  whole plan when the tool is already installed (zero steps), and a failed
+  install step re-checks reality — if the tool is present the outcome is
+  success, so a package manager's "already installed" error can never read as
+  a false failure.

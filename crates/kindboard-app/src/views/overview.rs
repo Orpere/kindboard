@@ -147,8 +147,8 @@ pub fn show(
                         }));
                     }
                     if ui.button("Check again").clicked() {
-                        state.deps.begin_detect();
-                        cmds.push(OverviewCmd::Command(CoreCommand::DetectTools));
+                        let run = state.deps.begin_detect();
+                        cmds.push(OverviewCmd::Command(CoreCommand::DetectTools { run }));
                         cmds.push(OverviewCmd::Command(CoreCommand::CheckDockerDaemon));
                     }
                 });

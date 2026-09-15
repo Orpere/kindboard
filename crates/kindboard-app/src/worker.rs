@@ -169,12 +169,14 @@ async fn run_loop(
                         let worker_env = env.clone();
                         tasks.spawn(async move { do_reconcile(tx, worker_env).await });
                     }
-                    CoreCommand::DetectTools => {
+                    CoreCommand::DetectTools { run } => {
                         let tx = event_tx.clone();
                         tasks.spawn(async move {
-                            let result =
-                                tokio::time::timeout(DETECT_ALL_DEADLINE, do_detect_all(tx.clone()))
-                                    .await;
+                            let result = tokio::time::timeout(
+                                DETECT_ALL_DEADLINE,
+                                do_detect_all(tx.clone(), run),
+                            )
+                            .await;
                             if result.is_err() {
                                 // Backstop: even if a detect run stalls, the
                                 // UI must un-stick. The UI-side watchdog
@@ -182,7 +184,7 @@ async fn run_loop(
                                 log::warn!(
                                     "tool detection did not complete within {DETECT_ALL_DEADLINE:?}; emitting ToolsDetectDone"
                                 );
-                                emit_important(&tx, CoreEvent::ToolsDetectDone);
+                                emit_important(&tx, CoreEvent::ToolsDetectDone { run });
                             }
                         });
                     }
@@ -555,8 +557,9 @@ async fn probe_status(name: &str) -> ClusterLiveStatus {
 /// Detect every registry tool, emitting per-tool events. Tools are probed
 /// concurrently so the whole run is bounded by the slowest single tool
 /// (30 s timeout), not the sum of all eight — the UI watchdog thresholds
-/// rely on this.
-async fn do_detect_all(event_tx: Sender<CoreEvent>) {
+/// rely on this. Every event carries the `run` id so the UI can drop
+/// superseded runs.
+async fn do_detect_all(event_tx: Sender<CoreEvent>, run: u64) {
     let mut tasks = Vec::new();
     for tool in core::registry() {
         let tx = event_tx.clone();
@@ -569,6 +572,7 @@ async fn do_detect_all(event_tx: Sender<CoreEvent>) {
                 &tx,
                 CoreEvent::DetectedTool {
                     id: tool.id,
+                    run,
                     result,
                 },
             );
@@ -577,7 +581,7 @@ async fn do_detect_all(event_tx: Sender<CoreEvent>) {
     for task in tasks {
         let _ = task.await;
     }
-    emit_important(&event_tx, CoreEvent::ToolsDetectDone);
+    emit_important(&event_tx, CoreEvent::ToolsDetectDone { run });
 }
 
 /// Install one tool, forwarding its streamed install events.
@@ -1161,8 +1165,8 @@ mod tests {
         // A disconnected sender must not make emit panic or block.
         let (tx, _rx) = crossbeam_channel::bounded::<CoreEvent>(1);
         drop(_rx);
-        emit(&tx, CoreEvent::ToolsDetectDone);
-        emit_important(&tx, CoreEvent::ToolsDetectDone);
+        emit(&tx, CoreEvent::ToolsDetectDone { run: 0 });
+        emit_important(&tx, CoreEvent::ToolsDetectDone { run: 0 });
 
         // And the BusFull grace path is exercised through the bus tests in
         // `bus.rs`; here we only pin the no-panic property.
@@ -1175,9 +1179,9 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         });
-        tx.try_send(CoreEvent::ToolsDetectDone).unwrap();
+        tx.try_send(CoreEvent::ToolsDetectDone { run: 0 }).unwrap();
         let started = std::time::Instant::now();
-        emit(&tx, CoreEvent::ToolsDetectDone);
+        emit(&tx, CoreEvent::ToolsDetectDone { run: 0 });
         let elapsed = started.elapsed();
         assert!(
             elapsed < Duration::from_millis(500),
