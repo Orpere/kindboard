@@ -56,9 +56,12 @@ user account (that is game over regardless of any tool).
 - **Kubeconfig safety** — edits to `~/.kube/config` are atomic, backup the
   previous file, and write with user-private permissions; tests cover the
   symlink-attack case.
-- **Secret hygiene** — kubeconfig tokens are scrubbed from error tails, and
-  CI scans every commit for leaked secrets (gitleaks).
-- **Supply-chain gates in CI** — `cargo audit`, `cargo deny`, dependency
-  review, keyless-signed releases, SLSA provenance attestation, and an SPDX
-  SBOM per release.
+- **Secret hygiene** — kubeconfig tokens are scrubbed from error tails;
+  `.env` is gitignored and core ships scrub tests, so secrets never enter the
+  repository, an error message, or a log.
+- **Local supply-chain gates** — every release is built locally with
+  `make build` (fmt/clippy/tests, then `dist/` artifacts + `SHA256SUMS`),
+  `make audit` (cargo-audit), and `make deny` (cargo-deny against
+  `deny.toml`). macOS binaries are notarized and stapled when the notarization
+  credentials are set.
 - **Threat model** — see [docs/threat-model.md](docs/threat-model.md).

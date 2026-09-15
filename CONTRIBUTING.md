@@ -5,25 +5,16 @@ architecture is documented in [docs/architecture.md](docs/architecture.md),
 the contracts in [docs/contracts.md](docs/contracts.md), and decisions in
 [docs/adrs/](docs/adrs/).
 
-## Quality gates — every PR must pass
+## Quality gates — run locally before you push
 
-All of these run in CI (`.github/workflows/ci.yml`) and must be green to merge:
-
-```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-shellcheck -S warning scripts/*.sh   # (darwin-env.sh excluded: sourced-only)
-```
-
-Plus the supply-chain gates (`.github/workflows/security.yml`):
+There is no CI; run these locally and keep them green before pushing. The
+maintainer re-runs all three before every release.
 
 ```sh
-cargo audit          # RustSec advisories
-cargo deny check     # licenses / bans / sources (deny.toml)
+make check      # cargo fmt --all --check · clippy -D warnings · cargo test --workspace
+make audit      # RustSec advisory scan (cargo-audit)
+make deny       # licenses / bans / sources / advisories against deny.toml (cargo-deny)
 ```
-
-Run them locally before pushing — the same commands in the workflows.
 
 ## Ground rules
 
@@ -50,8 +41,9 @@ Run them locally before pushing — the same commands in the workflows.
 
 ## Release process
 
-Releases are tag-driven: `git tag vX.Y.Z && git push --tags` builds, signs,
-attests, and publishes via `.github/workflows/release.yml` (SHA256SUMS,
-cosign signatures, SLSA provenance, SPDX SBOM). Local cross-builds remain
-available via `make release` (see the Makefile targets); the local flow must
-not diverge from the artifact contract in `scripts/build.sh`.
+Releases are built and published locally with `make release` (ADR-0028): it
+tags `v$(VERSION)`, runs the gates and cross-builds via `scripts/build.sh`,
+and publishes the `dist/` artifacts + `SHA256SUMS` to GitHub Releases as the
+distribution endpoint. The GitHub Pages site ships via `make publish`. The
+artifact contract lives in `scripts/build.sh` — keep `make release` in sync
+with it.

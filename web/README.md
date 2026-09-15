@@ -4,10 +4,9 @@ Static, self-contained presentation site for kindboard.
 
 **Live:** <https://orpere.github.io/kindboard/> — published from this folder
 with `make publish` (repo root): it pushes `web/**` to the `gh-pages` branch
-and switches GitHub Pages to legacy branch publishing. The **Pages deploy** is
-the one thing that still runs locally from the Makefile, not in Actions —
-CI/CD for builds, quality gates, security, and releases lives in
-`.github/workflows/` (see ADR-0027).
+and switches GitHub Pages to legacy branch publishing. Publishing is local and
+Actions-free, like every other pipeline step — builds, quality gates, security
+scans, and releases all run locally from the Makefile (see ADR-0028).
 
 ## Deploy anywhere
 

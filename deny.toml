@@ -1,5 +1,5 @@
-# kindboard dependency policy — enforced by the `Security` workflow
-# (EmbarkStudios/cargo-deny-action) on every push/PR and weekly.
+# kindboard dependency policy — enforced locally via `make deny` (cargo-deny)
+# as part of the release gates; no CI involved (ADR-0028).
 #
 # The allowlist below was verified against the current Cargo.lock (503 crates)
 # via `cargo deny check` as of 2026-09-15. If a future dependency introduces a

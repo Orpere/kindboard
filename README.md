@@ -14,7 +14,6 @@ leaves to you: **flannel, calico or Cilium** networking, **nginx, traefik or
 Cilium** ingress, Hubble observability, the Gateway API, and cluster mesh.
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
-![CI](https://github.com/Orpere/kindboard/actions/workflows/ci.yml/badge.svg)
 ![Rust](https://img.shields.io/badge/rust-1.98+-orange)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-9cf)
 
@@ -172,10 +171,10 @@ opt-in:
 | `--detach` | Launch the GUI in the **background** (new session, stdio to `/dev/null`); the terminal prints the PID + log path and returns. Logs keep flowing to `<data_dir>/kindboard/kindboard.log` |
 | `-v`, `--verbose` | Raise the log level — repeatable: `-v` → debug, `-vv` → trace. The quickest troubleshooting combo: `kindboard --detach -v --log-file ~/kindboard.log` |
 | `--log-file <path>` | Also write timestamped log records to `<path>`; in `--detach` mode this defaults to `<data_dir>/kindboard/kindboard.log` |
-| `--screenshot <file.png>` | Capture one screenshot then exit (CI / headless, e.g. on Xvfb) |
+| `--screenshot <file.png>` | Capture one screenshot then exit (headless automation, e.g. on Xvfb) |
 | `--screenshot-every <secs> [--screenshot-dir <dir>]` | Capture periodically into a directory, then exit |
 
-Dev/CI environment knobs (headless screenshot captures + test automation):
+Dev/headless environment knobs (headless screenshot captures + test automation):
 
 | Variable | Effect |
 |---|---|
@@ -208,12 +207,13 @@ watch errors). Detached runs always write to a log file, so
 | `make test` | Unit + integration tests (e2e skipped unless `KINDBOARD_E2E=1`) |
 | `make e2e` | Full suite including real-kind e2e (requires docker + kind; throwaway `kbtest-*` clusters). Covers cluster create/delete, kubeconfig merge, topology, and the CNI matrix (flannel/calico/cilium full installs) |
 | `make audit` | RustSec advisory scan (needs `cargo install cargo-audit`) |
+| `make deny` | Dependency policy check: licenses/bans/sources/advisories against `deny.toml` (needs `cargo install cargo-deny --locked`) |
 | `make build` / `make dist` | Release build into `dist/` + `SHA256SUMS` (runs all gates first) |
 | `make build-all` | Attempt all supported targets: linux x86_64/aarch64, darwin x86_64/arm64, windows x86_64. Runs `darwin-bootstrap` first, then cross targets build when their toolchains are present (osxcross for darwin — see ADR-0017, mingw64-gcc for windows — see ADR-0019), else they are skipped with guidance |
 | `make dist-macos` | Cross-build darwin release assets with `KINDBOARD_REQUIRE_DARWIN=1`; auto-resolves all darwin dependencies first via `make darwin-bootstrap`; binaries are ad-hoc signed via rcodesign |
 | `make darwin-bootstrap` | Resolve all darwin (macOS) cross-build dependencies — host packages (sudo, confirm-first or `KINDBOARD_BOOTSTRAP_YES=1`), rustup targets, rcodesign, osxcross toolchain + digest-pinned SDK. Idempotent; `--check` mode via `./scripts/bootstrap-darwin.sh --check` |
-| `make release` | **Local** release producer (ADR-0027): tag `v$(VERSION)` + `gh release create` with the `dist/` tarballs/zip + `SHA256SUMS`. For offline/cross builds — not the canonical channel; CI (`release.yml`) signs/attests/SBOMs the same artifact contract on tag push |
-| `make publish` | Deploy `web/` to GitHub Pages via the `gh-pages` branch — the **only** step that still runs locally, not in Actions |
+| `make release` | **Local** release producer (ADR-0028): tag `v$(VERSION)` + `gh release create` with the `dist/` tarballs/zip + `SHA256SUMS` — GitHub Releases is the distribution endpoint; build, gates, and cross-builds all happen locally |
+| `make publish` | Deploy `web/` to GitHub Pages via the `gh-pages` branch (local, no Actions) |
 | `make assets` | Fetch + resize the official logos into `assets/` (ImageMagick) |
 | `make clean` | Remove build artifacts and `dist/` |
 | `make help` | List all targets |
@@ -221,10 +221,10 @@ watch errors). Detached runs always write to a log file, so
 Scripts: `scripts/build.sh` (local reproducible release pipeline) ·
 `scripts/install-macos.sh` / `scripts/install-windows.ps1` (prebuilt
 installers) · `scripts/check-targets.sh` (cross-target compile gate) ·
-`scripts/prepare-assets.sh` (logo pipeline). Releases are **dual-producer**
-(ADR-0027): CI (`.github/workflows/release.yml`) is the canonical channel for
-tagged releases (signed + attested + SBOM); `make release` stays for offline
-and cross builds — both emit the same artifact contract.
+`scripts/prepare-assets.sh` (logo pipeline). Releases are built and published
+locally via `make release` (ADR-0028): deterministic Linux tarball, Windows
+zip, and darwin cross-builds — GitHub Releases is used purely as the
+distribution endpoint, and `SHA256SUMS` ships with every release.
 
 ## How kindboard works
 
@@ -267,7 +267,7 @@ between every module).
 | [docs/dependency-install-matrix.md](docs/dependency-install-matrix.md) | Detection commands, package names, pinned binary downloads per tool |
 | [docs/howtos/install-kubectx.md](docs/howtos/install-kubectx.md) | **How-to with screenshots:** install kubectx from the Dependencies panel |
 | [docs/howtos/create-cni-clusters.md](docs/howtos/create-cni-clusters.md) | **How-to with screenshots:** flannel, calico and cilium clusters, end to end |
-| [docs/adrs/](docs/adrs/) | Architecture decision records (ADR-0008 … 0027) |
+| [docs/adrs/](docs/adrs/) | Architecture decision records (ADR-0008 … 0028) |
 | [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md) | Logo ownership, sources and trademark notes |
 
 ## Website
@@ -287,12 +287,12 @@ Security vulnerabilities should be reported privately via
 see [SECURITY.md](SECURITY.md) for the policy and supported versions, and
 [docs/threat-model.md](docs/threat-model.md) for the threat model.
 
-Every release is built in CI with quality and supply-chain gates
-(`.github/workflows/`): fmt/clippy/tests on 3 OSes, `cargo audit`,
-`cargo deny`, secret scanning, dependency review, keyless-signed artifacts,
-SLSA provenance, and an SPDX SBOM. All downloaded tools are pinned to a
-version **and** a SHA-256 digest verified against the upstream project's
-official checksums.
+Every release is built locally with `make build` (fmt, clippy, and tests as
+gates), `make audit` (cargo-audit), and `make deny` (cargo-deny against
+`deny.toml`); artifacts ship a `SHA256SUMS` file, and macOS binaries are
+notarized and stapled when the notarization credentials are set. All
+downloaded tools are pinned to a version **and** a SHA-256 digest verified
+against the upstream project's official checksums.
 
 ## License & attribution
 

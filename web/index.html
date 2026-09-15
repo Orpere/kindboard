@@ -170,7 +170,7 @@
         <article class="card">
           <svg class="card-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></svg>
           <h3>Verified releases &amp; supply chain</h3>
-          <p>Every tool download is SHA-256 pinned and verified. Releases are built in CI and keyless-signed (cosign) with SLSA provenance and an SPDX SBOM — verify what you run.</p>
+          <p>Every tool download is SHA-256 pinned and verified against upstream checksums; releases ship a SHA256SUMS file and macOS binaries are notarized — verify what you run.</p>
         </article>
       </div>
     </div>
@@ -419,7 +419,7 @@ cargo build --release
         <div class="tl-item"><span class="tl-dot done"></span><div><h3>v0.1.12</h3><p>Dependencies panel: tool logos stay visible on the Light theme + k9s now opens in the OS default terminal on macOS &amp; Windows.</p></div></div>
         <div class="tl-item"><span class="tl-dot done"></span><div><h3>v0.1.13</h3><p>Light theme: logos render in their original brand colors — no more all-black icons; white lettering is recolored dark.</p></div></div>
         <div class="tl-item"><span class="tl-dot done"></span><div><h3>v0.1.14</h3><p>Strong-text color fix — emphasized labels are readable in every theme (ADR-0026), plus regenerated how-to screenshots.</p></div></div>
-        <div class="tl-item"><span class="tl-dot done"></span><div><h3>v0.1.15</h3><p>Enterprise compliance hardening — SHA-pinned CI/CD gates, supply-chain policy, and signed + attested releases with an SBOM (ADR-0027).</p></div></div>
+        <div class="tl-item"><span class="tl-dot done"></span><div><h3>v0.1.15</h3><p>Compliance documentation, dependency policy (deny.toml), refreshed screenshots and docs.</p></div></div>
         <div class="tl-item"><span class="tl-dot next"></span><div><h3>Next</h3><p>Multi-cluster views, Helm chart library, and your feedback.</p></div></div>
       </div>
     </div>

@@ -21,12 +21,10 @@
 # `make check-targets` runs the cross-target compile gate (host tests + every
 # available windows/darwin cargo check).
 #
-# Dual-producer release model (ADR-0027): tagged releases are built, signed and
-# published by GitHub Actions (.github/workflows/release.yml) — CI is the
-# canonical producer. Local `make release` remains for offline and cross builds
-# (osxcross darwin, deterministic Linux tarball + Windows zip); both producers
-# emit the same artifact contract (see the release.yml header). The GitHub
-# Pages deploy still runs only from here (`make publish` — no Actions). On
+# No GitHub Actions by design (ADR-0028): every gate and the release pipeline
+# run locally from this Makefile — `make check` (fmt/clippy/test), `make audit`
+# (cargo-audit), `make deny` (cargo-deny against deny.toml), `make release`
+# (build + sign + publish), and the GitHub Pages deploy (`make publish`). On
 # macOS, `make mac-app` (scripts/make-mac-app.sh) assembles a double-clickable
 # dist/kindboard.app from a locally built binary — zero Gatekeeper prompts (see
 # docs/macos-distribution.md). When the notarization env vars are set (see
@@ -47,7 +45,7 @@ VERSION := $(shell grep -m1 '^version' crates/kindboard-app/Cargo.toml | cut -d'
 UNAME_S := $(shell uname -s)
 PAGES_DIR := /tmp/kindboard-pages
 
-.PHONY: help all build build-all dist-macos darwin-bootstrap run mac-app mac-install mac-run win-install win-run fmt fmt-check clippy test e2e audit check check-targets assets dist clean version release publish
+.PHONY: help all build build-all dist-macos darwin-bootstrap run mac-app mac-install mac-run win-install win-run fmt fmt-check clippy test e2e audit deny check check-targets assets dist clean version release publish
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -111,6 +109,10 @@ e2e: ## Full suite including real-kind e2e (requires docker + kind; uses kbtest-
 audit: ## RustSec advisory scan (requires cargo-audit)
 	@command -v $(CARGO_AUDIT) >/dev/null 2>&1 || { echo "error: cargo-audit not found — run: cargo install cargo-audit"; exit 1; }
 	$(CARGO_AUDIT) audit
+
+deny: ## cargo-deny policy check (licenses/bans/sources/advisories against deny.toml)
+	@command -v cargo-deny >/dev/null 2>&1 || { echo "error: cargo-deny not found — run: cargo install cargo-deny --locked"; exit 1; }
+	cargo deny check
 
 check: fmt-check clippy test ## All quality gates (syntax + logic + style)
 

@@ -16,4 +16,4 @@
 ## Test plan
 
 <!-- How did you verify beyond the unit tests? E.g. live kind cluster run,
-     manual UI pass on which OS, etc. Or "CI matrix covers it". -->
+     manual UI pass on which OS, etc. Or "local gates cover it". -->
