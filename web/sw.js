@@ -19,7 +19,7 @@
 // kindboard deployments (or other projects) sharing one origin each keep
 // their own cache and this SW never deletes anything outside its scope.
 var SCOPE_PATH = new URL(self.registration.scope).pathname;
-var CACHE_PREFIX = "kindboard-site-v10:";
+var CACHE_PREFIX = "kindboard-site-v11:";
 var CACHE = CACHE_PREFIX + SCOPE_PATH;
 var ASSETS = [
   "./",
