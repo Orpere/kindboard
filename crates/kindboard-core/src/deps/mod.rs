@@ -354,6 +354,20 @@ pub fn path_entries() -> Vec<PathBuf> {
     }
 }
 
+/// Remove duplicate path entries, keeping the first occurrence of each.
+///
+/// Shells and desktop launchers routinely prepend directories onto an
+/// already-injected PATH (e.g. `~/.local/bin` or `~/.opencode/bin` appearing
+/// twice); the duplicates add no search semantics (first match wins) and
+/// violate the no-duplicates contract of [`effective_path_entries`].
+fn dedup_path_entries(entries: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = std::collections::HashSet::new();
+    entries
+        .into_iter()
+        .filter(|dir| seen.insert(dir.clone()))
+        .collect()
+}
+
 /// The PATH entries detection should search: the process PATH plus the
 /// directories a GUI-launched app commonly misses.
 ///
@@ -366,7 +380,7 @@ pub fn path_entries() -> Vec<PathBuf> {
 /// this extended PATH so a found binary resolves its own runtime the same
 /// way a user's shell would.
 pub fn effective_path_entries() -> Vec<PathBuf> {
-    let mut dirs = path_entries();
+    let mut dirs = dedup_path_entries(path_entries());
     let mut push_missing = |dir: PathBuf| {
         if !dirs.iter().any(|existing| existing == &dir) {
             dirs.push(dir);
@@ -1779,19 +1793,42 @@ mod tests {
     }
 
     #[test]
+    fn dedup_path_entries_keeps_first_occurrence() {
+        // Hermetic regression test: launchers/shells prepend directories onto
+        // an already-injected PATH (e.g. ~/.opencode/bin twice). Duplicates
+        // must collapse to the first occurrence, order preserved.
+        let a = PathBuf::from("/usr/bin");
+        let b = PathBuf::from("/opt/tool/bin");
+        let c = PathBuf::from("/usr/bin");
+        assert_eq!(
+            dedup_path_entries(vec![a.clone(), b.clone(), c, a.clone()]),
+            vec![a, b]
+        );
+        assert_eq!(dedup_path_entries(vec![]), Vec::<PathBuf>::new());
+    }
+
+    #[test]
     fn effective_path_keeps_original_order() {
-        let mut before = path_entries();
-        before.push(local_bin_dir());
+        // The ambient PATH may itself contain duplicates; the contract is
+        // first-occurrence order, then the appended directories.
+        let mut seen = std::collections::HashSet::new();
+        let expected: Vec<PathBuf> = path_entries()
+            .into_iter()
+            .filter(|dir| seen.insert(dir.clone()))
+            .collect();
         let after = effective_path_entries();
-        // Every original entry survives, in its original position.
-        let mut idx = 0;
-        for entry in &after {
-            if idx < before.len() - 1 {
-                assert_eq!(entry, &before[idx]);
-                idx += 1;
-            }
+        assert!(
+            after.len() >= expected.len(),
+            "effective path {after:?} shorter than deduped PATH {expected:?}"
+        );
+        for (idx, dir) in expected.iter().enumerate() {
+            assert_eq!(&after[idx], dir, "entry {idx} reordered or dropped");
         }
-        assert!(idx >= before.len() - 1, "PATH entries were reordered");
+        assert!(
+            after.contains(&local_bin_dir()),
+            "effective path must include {0}; got {after:?}",
+            local_bin_dir().display()
+        );
     }
 
     // ---- docker daemon probe ----
