@@ -7,7 +7,7 @@
 //! and the index can only ever hold a valid `ThemeId`, so it cannot be
 //! poisoned or go out of bounds.
 
-use eframe::egui::{self, Color32, Margin, Style, Visuals};
+use eframe::egui::{self, Color32, Margin, RichText, Style, Visuals};
 use std::sync::atomic::{AtomicU8, Ordering};
 
 /// One of the three selectable themes.
@@ -110,6 +110,13 @@ pub struct Palette {
     pub canvas_bg: Color32,
     /// Secondary text on surfaces.
     pub text_dim: Color32,
+    /// Emphasized ("strong") text (ADR-0026). egui 0.36 derives its strong
+    /// text color from the *active* widget text color, which the R8 rule
+    /// sets to `on_accent` — so strong text without an explicit color would
+    /// render white-on-light / near-black-on-dark and vanish. All strong
+    /// text must therefore carry this explicit per-theme color (see
+    /// [`strong`]). It is NOT used by egui automatically.
+    pub strong_text: Color32,
     /// Extreme background (text edits, scrollbars).
     pub extreme_bg: Color32,
     // --- hover (ADR-0022) ---
@@ -179,6 +186,7 @@ const fn dark() -> Palette {
         stroke: Color32::from_rgb(0x2c, 0x36, 0x42),
         canvas_bg: Color32::from_rgb(0x0e, 0x12, 0x17),
         text_dim: Color32::from_rgb(0x9a, 0xa6, 0xb4),
+        strong_text: Color32::from_rgb(0xe9, 0xf1, 0xf7),
         extreme_bg: Color32::from_rgb(0x0a, 0x0d, 0x11),
         hover_fill: Color32::from_rgb(0x27, 0x32, 0x3d),
         hover_text: Color32::from_rgb(0xc6, 0xcf, 0xd9),
@@ -210,6 +218,7 @@ const fn light() -> Palette {
         stroke: Color32::from_rgb(0xd0, 0xd7, 0xdf),
         canvas_bg: Color32::from_rgb(0xee, 0xf1, 0xf5),
         text_dim: Color32::from_rgb(0x5a, 0x66, 0x72),
+        strong_text: Color32::from_rgb(0x1f, 0x26, 0x2e),
         extreme_bg: Color32::from_rgb(0xe6, 0xea, 0xf0),
         hover_fill: Color32::from_rgb(0xdc, 0xe3, 0xea),
         hover_text: Color32::from_rgb(0x37, 0x42, 0x4d),
@@ -239,6 +248,7 @@ const fn high_contrast() -> Palette {
         stroke: Color32::from_rgb(0xff, 0xff, 0xff),
         canvas_bg: Color32::from_rgb(0x00, 0x00, 0x00),
         text_dim: Color32::from_rgb(0xcf, 0xd8, 0xdc),
+        strong_text: Color32::WHITE,
         extreme_bg: Color32::from_rgb(0x00, 0x00, 0x00),
         hover_fill: Color32::from_rgb(0x1a, 0x1a, 0x1a),
         hover_text: Color32::from_rgb(0xd3, 0xd9, 0xde),
@@ -263,6 +273,20 @@ static CURRENT: AtomicU8 = AtomicU8::new(ThemeId::Dark as u8);
 #[must_use]
 pub fn pal() -> &'static Palette {
     &PALETTES[CURRENT.load(Ordering::Relaxed) as usize]
+}
+
+/// Emphasized text in the active theme (ADR-0026): `RichText` already
+/// carrying the explicit `strong_text` color.
+///
+/// Must be used for every strong/emphasized label instead of a bare
+/// [`RichText::strong`] or `ui.strong(...)`: egui 0.36 resolves strong text
+/// from the *active* widget color (set to `on_accent` by the R8 rule), so
+/// strong text without an explicit color renders white-on-light and
+/// near-black-on-dark — invisible. The explicit color wins over egui's
+/// derived one.
+#[must_use]
+pub fn strong(text: impl Into<String>) -> RichText {
+    RichText::new(text).strong().color(pal().strong_text)
 }
 
 /// The active theme id.
@@ -480,6 +504,29 @@ mod tests {
             assert_ne!(
                 pal.hover_text, pal.on_accent,
                 "{id:?}: hover_text must not reuse on_accent"
+            );
+        }
+    }
+
+    #[test]
+    fn strong_text_contrasts_with_bg_in_every_theme() {
+        // Regression (ADR-0026): egui 0.36 derives strong text from the
+        // ACTIVE widget color, which R8 sets to `on_accent` — strong labels
+        // rendered white-on-light / near-black-on-dark. Strong text must be
+        // an explicit per-theme color that clears 4.5:1 (WCAG AA, normal
+        // text) on the background and never equals `on_accent`.
+        for id in ThemeId::ALL {
+            let pal = id.palette();
+            let ratio = contrast(pal.strong_text, pal.bg);
+            assert!(
+                ratio >= 4.5,
+                "{id:?}: strong_text {:?} on bg {:?} = {ratio:.2}:1 (need ≥ 4.5:1)",
+                pal.strong_text,
+                pal.bg,
+            );
+            assert_ne!(
+                pal.strong_text, pal.on_accent,
+                "{id:?}: strong_text must not reuse on_accent"
             );
         }
     }

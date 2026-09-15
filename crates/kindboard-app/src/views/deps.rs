@@ -214,7 +214,7 @@ fn version_line(status: &ToolStatus) -> String {
 /// owns the command sender so the panel stays pure UI).
 pub fn show(ui: &mut egui::Ui, state: &mut DepsState, actions: &mut Vec<CoreCommand>) {
     ui.horizontal_wrapped(|ui| {
-        ui.strong("Dependencies");
+        ui.label(theme::strong("Dependencies"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let refreshing = state.detecting;
             let refresh = ui
@@ -267,7 +267,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut DepsState, actions: &mut Vec<CoreComm
         ui.horizontal(|ui| {
             icons::tool_icon(ui, id, 22.0);
             ui.vertical(|ui| {
-                ui.label(RichText::new(tool.display).strong());
+                ui.label(
+                    RichText::new(tool.display)
+                        .strong()
+                        .color(theme::pal().strong_text),
+                );
                 match state.results.get(&id) {
                     Some(Ok(status)) => match status {
                         ToolStatus::Installed { version, path } => {

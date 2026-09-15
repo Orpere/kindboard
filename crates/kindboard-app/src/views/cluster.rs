@@ -244,7 +244,12 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
     // ---- header ----------------------------------------------------------
     egui::Panel::top(egui::Id::new(("cluster-header", tab.name.clone()))).show(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.strong(RichText::new(&tab.name).size(16.0));
+            ui.label(
+                RichText::new(&tab.name)
+                    .size(16.0)
+                    .strong()
+                    .color(theme::pal().strong_text),
+            );
             match &tab.topo {
                 Some(_) => pill(ui, "running", theme::pal().green),
                 None => pill(ui, "topology unknown", theme::pal().grey),
@@ -385,7 +390,7 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
         .min_size(150.0)
         .max_size(260.0)
         .show(ui, |ui| {
-            ui.strong("Nodes");
+            ui.label(theme::strong("Nodes"));
             ui.separator();
             match &tab.topo {
                 Some(graph) => {
@@ -442,7 +447,7 @@ pub fn show(ui: &mut egui::Ui, tab: &mut ClusterTab) -> Vec<TabCmd> {
         .min_size(200.0)
         .max_size(360.0)
         .show(ui, |ui| {
-            ui.strong("Details");
+            ui.label(theme::strong("Details"));
             ui.separator();
             let mut delete_request: Option<String> = None;
             match &tab.topo {
@@ -703,7 +708,7 @@ fn poll_picker(tab: &mut ClusterTab, cmds: &mut Vec<TabCmd>) {
 /// Logs sub-view: source picker, follow/tail, start/stop, output ring.
 fn logs_section(ui: &mut egui::Ui, tab: &mut ClusterTab, cmds: &mut Vec<TabCmd>) {
     ui.horizontal(|ui| {
-        ui.strong("Logs");
+        ui.label(theme::strong("Logs"));
         // Source picker. The picked source is staged into `new_source` and
         // applied after the match so the borrows stay disjoint.
         let mut source_changed = false;
@@ -978,7 +983,12 @@ fn show_confirms(ui: &mut egui::Ui, tab: &mut ClusterTab, cmds: &mut Vec<TabCmd>
         ui.label(RichText::new(body).color(theme::pal().red));
         ui.add_space(6.0);
         ui.label("Type the cluster name to confirm:");
-        ui.label(RichText::new(&tab.name).strong().monospace());
+        ui.label(
+            RichText::new(&tab.name)
+                .strong()
+                .color(theme::pal().strong_text)
+                .monospace(),
+        );
         ui.add_space(4.0);
         ui.add(
             egui::TextEdit::singleline(&mut typed)

@@ -86,7 +86,7 @@ pub fn show(
     let deps_ready = deps_summary(&state.deps);
 
     ui.horizontal_wrapped(|ui| {
-        ui.strong("Clusters");
+        ui.label(theme::strong("Clusters"));
         let create = ui
             .add(
                 egui::Button::new(
@@ -198,7 +198,12 @@ pub fn show(
             .show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(8.0);
-                    ui.label(RichText::new("No clusters yet").size(16.0).strong());
+                    ui.label(
+                        RichText::new("No clusters yet")
+                            .size(16.0)
+                            .strong()
+                            .color(theme::pal().strong_text),
+                    );
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new("Create your first kind cluster to get started.")
@@ -289,7 +294,12 @@ pub fn show(
             }
             ui.add_space(6.0);
             ui.label("Type the cluster name to confirm:");
-            ui.label(RichText::new(&confirm.name).strong().monospace());
+            ui.label(
+                RichText::new(&confirm.name)
+                    .strong()
+                    .color(theme::pal().strong_text)
+                    .monospace(),
+            );
             ui.add_space(4.0);
             ui.add(
                 egui::TextEdit::singleline(&mut confirm.typed)
@@ -523,7 +533,7 @@ fn render_card(
 
             // Row 1: name + status pill (one line, truncated).
             ui.horizontal(|ui| {
-                ui.strong(crate::util::truncate(&row.name, CARD_NAME_CHARS))
+                ui.label(theme::strong(crate::util::truncate(&row.name, CARD_NAME_CHARS)))
                     .on_hover_text(&row.name);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     status_pill(ui, row.source_label, row.status);

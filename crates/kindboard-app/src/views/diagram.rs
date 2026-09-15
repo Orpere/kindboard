@@ -803,7 +803,7 @@ pub fn detail_panel(
             ui.heading(&service.name);
             ui.label(format!("namespace: {}", service.ns));
             ui.separator();
-            ui.strong("ports");
+            ui.label(theme::strong("ports"));
             for port in &service.ports {
                 let target = port.target_port.as_deref().unwrap_or("-");
                 let node_port = port
@@ -842,7 +842,7 @@ pub fn detail_panel(
 
     // Related events (ns-scoped, name or message match).
     ui.separator();
-    ui.strong("events");
+    ui.label(theme::strong("events"));
     let events: Vec<&K8sEvent> = graph
         .events
         .iter()
@@ -873,7 +873,7 @@ pub fn detail_panel(
 }
 
 fn label_map(ui: &mut egui::Ui, title: &str, map: &BTreeMap<String, String>) {
-    ui.strong(title);
+    ui.label(theme::strong(title));
     if map.is_empty() {
         ui.label(
             egui::RichText::new("(none)")

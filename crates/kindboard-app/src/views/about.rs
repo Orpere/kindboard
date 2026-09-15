@@ -88,7 +88,12 @@ pub fn show(ctx: &egui::Context, open: &mut bool) -> bool {
         .show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(6.0);
-                ui.label(RichText::new("kindboard").size(22.0).strong());
+                ui.label(
+                    RichText::new("kindboard")
+                        .size(22.0)
+                        .strong()
+                        .color(theme::pal().strong_text),
+                );
                 ui.label(
                     RichText::new(format!("version {}", env!("CARGO_PKG_VERSION")))
                         .color(theme::pal().text_dim),

@@ -145,6 +145,7 @@ Internal (private) implementation notes:
 | stroke | `0x2c3642` | `0xd0d7df` | `0xffffff` |
 | canvas_bg | `0x0e1217` | `0xeef1f5` | `0x000000` |
 | text_dim | `0x9aa6b4` | `0x5a6672` | `0xcfd8dc` |
+| strong_text | `0xe9f1f7` | `0x1f262e` | `WHITE` |
 | extreme_bg | `0x0a0d11` | `0xe6eaf0` | `0x000000` |
 | node_text | `0xd6e4ee` | `0x2b333b` | `0xffffff` |
 | tooltip_bg | `black_alpha(220)` | `black_alpha(230)` | `black` (opaque) |
@@ -494,6 +495,14 @@ components**, in every theme. Implemented as:
    luminance logic elsewhere.
 4. **Selected tab** (`render_tab_bar`) keeps explicit `pal().on_accent` text;
    the per-theme palettes make it legible on all three selection fills.
+5. **Strong text** (ADR-0026): egui 0.36 derives strong-text color from
+   `widgets.active.fg_stroke` — the very field R8 sets to `on_accent` — so a
+   bare `.strong()` would render white-on-light / near-black-on-dark.
+   Every strong label must use `theme::strong(text)` (or an explicit
+   `.color(pal().strong_text)`); `strong_text` is `0xe9f1f7` (Dark),
+   `0x1f262e` (Light), `WHITE` (HighContrast) — ≥ 4.5:1 on `bg` in all
+   themes, never `on_accent`. Locked by
+   `strong_text_contrasts_with_bg_in_every_theme`.
 
 ### egui-0.36 API-name corrections applied during implementation
 

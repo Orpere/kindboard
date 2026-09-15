@@ -260,7 +260,7 @@ pub fn show(ctx: &egui::Context, panel: &mut OpPanel, actions: &mut Vec<CoreComm
         .show(ctx, |ui| {
             // Step timeline.
             if !panel.steps.is_empty() {
-                ui.strong("Steps");
+                ui.label(theme::strong("Steps"));
                 for step in &panel.steps {
                     let (marker, color) = match step.status {
                         StepStatus::Running => ("\u{2026}", theme::pal().amber),
@@ -282,7 +282,7 @@ pub fn show(ctx: &egui::Context, panel: &mut OpPanel, actions: &mut Vec<CoreComm
 
             // Output tail (both axes: long streamed lines wrap instead of
             // overflowing the window — R3).
-            ui.strong("Output");
+            ui.label(theme::strong("Output"));
             ScrollArea::both()
                 .stick_to_bottom(true)
                 .max_height(220.0)

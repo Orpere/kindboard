@@ -163,6 +163,17 @@ impl KindboardApp {
         app.issue(CoreCommand::Reconcile);
         app.issue(CoreCommand::DetectTools { run: detect_run });
         app.issue(CoreCommand::CheckDockerDaemon);
+        // Dev/CI: auto-start a dependency install (headless screenshot
+        // harness — no pointer input on a bare Xvfb). The core pre-flight
+        // gate still refuses tools that are already present.
+        if let Some(want) = std::env::var("KINDBOARD_AUTO_INSTALL").ok()
+            && let Some(tool) = kindboard_core::registry()
+                .into_iter()
+                .find(|tool| tool.id.to_string() == want)
+        {
+            app.overview.deps.begin_install(tool.id);
+            app.issue(CoreCommand::InstallTool { id: tool.id });
+        }
         app
     }
 
@@ -394,6 +405,17 @@ impl KindboardApp {
                     && tab.accept_topology(op_gen)
                 {
                     tab.apply_topology(*result);
+                    // Dev/CI: pre-select a node once its topology arrives
+                    // (headless screenshot harness — no pointer input on a
+                    // bare Xvfb). Same purpose as KINDBOARD_OPEN_CLUSTER.
+                    if let Some(want) = std::env::var("KINDBOARD_SELECT_NODE").ok()
+                        && tab
+                            .topo
+                            .as_ref()
+                            .is_some_and(|graph| graph.nodes.iter().any(|node| node.name == want))
+                    {
+                        tab.selected = Some(format!("node/{want}"));
+                    }
                 }
             }
             CoreEvent::LogLine { name, op_gen, line } => {
@@ -589,7 +611,7 @@ impl KindboardApp {
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 crate::icons::brand_mark(ui, 26.0);
-                ui.strong(egui::RichText::new("kindboard").size(16.0));
+                ui.label(theme::strong("kindboard").size(16.0));
                 ui.label(
                     egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
                         .color(theme::pal().text_dim)

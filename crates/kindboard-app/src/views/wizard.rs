@@ -177,7 +177,7 @@ pub fn show(ctx: &egui::Context, state: &mut WizardState) -> WizardAction {
                 );
 
                 ui.add_space(4.0);
-                ui.strong("CNI");
+                ui.label(theme::strong("CNI"));
                 ui.horizontal_wrapped(|ui| {
                     ui.radio_value(&mut state.cni, Cni::KindnetDefault, "Kindnet (default)");
                     ui.radio_value(&mut state.cni, Cni::Flannel, "Flannel");
@@ -186,7 +186,7 @@ pub fn show(ctx: &egui::Context, state: &mut WizardState) -> WizardAction {
                 });
 
                 ui.add_space(4.0);
-                ui.strong("Network CIDRs");
+                ui.label(theme::strong("Network CIDRs"));
                 ui.horizontal_wrapped(|ui| {
                     ui.label("pod:");
                     ui.add(
@@ -204,7 +204,7 @@ pub fn show(ctx: &egui::Context, state: &mut WizardState) -> WizardAction {
 
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    ui.strong("Workers");
+                    ui.label(theme::strong("Workers"));
                     ui.add(
                         egui::DragValue::new(&mut state.worker_count)
                             .range(0..=kindboard_core::MAX_WORKERS)
@@ -218,7 +218,7 @@ pub fn show(ctx: &egui::Context, state: &mut WizardState) -> WizardAction {
                 });
 
                 ui.add_space(4.0);
-                ui.strong("Ingress controller");
+                ui.label(theme::strong("Ingress controller"));
                 ui.horizontal_wrapped(|ui| {
                     ui.radio_value(&mut state.ingress, None, "None");
                     ui.radio_value(&mut state.ingress, Some(IngressController::Nginx), "Nginx");
@@ -273,7 +273,7 @@ pub fn show(ctx: &egui::Context, state: &mut WizardState) -> WizardAction {
 
                 if state.cni == Cni::Cilium {
                     ui.add_space(4.0);
-                    ui.strong("Cilium extras");
+                    ui.label(theme::strong("Cilium extras"));
                     ui.checkbox(&mut state.cilium.api_gateway, "API Gateway");
                     ui.checkbox(&mut state.cilium.hubble, "Hubble (relay + UI)");
                     ui.checkbox(&mut state.cilium.ingress, "Ingress Controller");
@@ -341,7 +341,7 @@ pub fn show(ctx: &egui::Context, state: &mut WizardState) -> WizardAction {
         ui.horizontal(|ui| {
             let create = ui.add_enabled(
                 valid && !state.name.is_empty(),
-                egui::Button::new(RichText::new("Create").strong())
+                egui::Button::new("Create")
                     .min_size(egui::vec2(110.0, 30.0)),
             );
             if create
