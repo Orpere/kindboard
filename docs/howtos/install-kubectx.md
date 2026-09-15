@@ -106,9 +106,24 @@ kindboard --screenshot docs/howtos/screenshots/01-deps-panel.png --screenshot-de
 kindboard --screenshot-every 1 --screenshot-dir /tmp/seq/
 ```
 
-Rendering works headlessly with software GL:
-`WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1` on an Xvfb display. The screenshots
-in this guide were produced with those flags — pixel-perfect, no clicks.
+Rendering works headlessly with software GL on an Xvfb display. The exact
+recipe that produced this guide's screenshots (and the themed/sized ones in
+the other how-tos) captures at 1280×800 **1:1 — no crop or resize**:
+
+```bash
+# 1. A host Wayland session makes winit ignore KINDBOARD_WINDOW_SIZE and
+#    render a fixed 1271×1526 framebuffer — unset it before running Xvfb:
+unset WAYLAND_DISPLAY
+
+# 2. Software GL on Xvfb + an explicit window size → exactly WxH at 1:1:
+WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 \
+  KINDBOARD_WINDOW_SIZE=1280x800 \
+  xvfb-run -a kindboard --screenshot out.png --screenshot-delay 20
+```
+
+`WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1` renders through software OpenGL (no
+GPU needed); `KINDBOARD_WINDOW_SIZE=<W>x<H>` fixes the framebuffer so the PNG
+comes out exactly WxH — no cropping, no scaling, no post-processing.
 
 Extra knobs for themed / sized captures:
 
@@ -118,4 +133,6 @@ Extra knobs for themed / sized captures:
 #   contains {"remember_last_wizard":true,"poll_interval_secs":5,"theme":"light"}
 # Open the create wizard on the first frame:  KINDBOARD_OPEN_WIZARD=1
 # Open a cluster tab once the first reconcile lands: KINDBOARD_OPEN_CLUSTER=<name>
+# Pre-select a node in the topology once it arrives: KINDBOARD_SELECT_NODE=<name>
+# Auto-start a dependency install (no pointer input on bare Xvfb): KINDBOARD_AUTO_INSTALL=<tool-id>
 ```

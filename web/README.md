@@ -4,8 +4,10 @@ Static, self-contained presentation site for kindboard.
 
 **Live:** <https://orpere.github.io/kindboard/> — published from this folder
 with `make publish` (repo root): it pushes `web/**` to the `gh-pages` branch
-and switches GitHub Pages to legacy branch publishing. No CI, no GitHub
-Actions — deploys run locally from the Makefile.
+and switches GitHub Pages to legacy branch publishing. The **Pages deploy** is
+the one thing that still runs locally from the Makefile, not in Actions —
+CI/CD for builds, quality gates, security, and releases lives in
+`.github/workflows/` (see ADR-0027).
 
 ## Deploy anywhere
 
@@ -47,8 +49,10 @@ Caching strategy (stale releases must never stick):
   successful fetch refreshes the offline copy — no manual service-worker cache
   bump is required when shipping a release.
 - **Everything else** (screenshots, favicons): **cache-first** with a
-  background refresh. Heavy assets load instantly; new screenshot filenames
-  are never stale.
+  background refresh. Heavy assets load instantly. Because screenshots are in
+  this set, regenerating them with the *same* filenames requires a manual
+  cache-version bump in `sw.js` (`CACHE_PREFIX`) — otherwise returning
+  visitors keep the stale copy until the background refresh finishes.
 
 ## Publishing
 

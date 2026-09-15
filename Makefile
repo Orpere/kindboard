@@ -21,10 +21,14 @@
 # `make check-targets` runs the cross-target compile gate (host tests + every
 # available windows/darwin cargo check).
 #
-# No GitHub Actions by design: releases and the GitHub Pages deploy both run
-# from here (see `make release` and `make publish`). On macOS, `make mac-app`
-# (scripts/make-mac-app.sh) assembles a double-clickable dist/kindboard.app
-# from a locally built binary — zero Gatekeeper prompts (see
+# Dual-producer release model (ADR-0027): tagged releases are built, signed and
+# published by GitHub Actions (.github/workflows/release.yml) — CI is the
+# canonical producer. Local `make release` remains for offline and cross builds
+# (osxcross darwin, deterministic Linux tarball + Windows zip); both producers
+# emit the same artifact contract (see the release.yml header). The GitHub
+# Pages deploy still runs only from here (`make publish` — no Actions). On
+# macOS, `make mac-app` (scripts/make-mac-app.sh) assembles a double-clickable
+# dist/kindboard.app from a locally built binary — zero Gatekeeper prompts (see
 # docs/macos-distribution.md). When the notarization env vars are set (see
 # scripts/build.sh header), darwin release zips are notarized + stapled and
 # `make release` ships them alongside the tarballs.

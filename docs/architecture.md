@@ -1,7 +1,7 @@
 # kindboard — Architecture
 
 > Design record for `kindboard-core` + `kindboard-app`. Companion documents:
-> `docs/contracts.md` (typed seams), `docs/adrs/ADR-0008…0015` (decisions),
+> `docs/contracts.md` (typed seams), `docs/adrs/ADR-0008…0027` (decisions),
 > `docs/dependency-install-matrix.md` (tool installs).
 >
 > All flag names, field names, and URLs below were verified against official
@@ -34,8 +34,11 @@ architecture is the answer to five constraints, in priority order:
    ([§5](#5-error-taxonomy-thiserror)); cancellation, timeouts, and drift are
    first-class conditions, never silent swallows.
 5. **Reproducible by default.** Downloads are tag-pinned AND SHA-256-checked;
-   releases are built by a local script into `dist/` with checksums
-   (ADR-0004) — no build that depends on the state of someone's CI fleet.
+   the Linux release tarball is deterministic, and CI-built releases are
+   keyless-signed, SLSA-attested, and carry an SBOM (ADR-0027). Releases are
+   dual-producer: CI is canonical for tagged releases; the local
+   `make release` path stays for offline/cross builds — both emit the same
+   artifact contract.
 
 ## 2. System graph
 
@@ -154,6 +157,62 @@ The tokio runtime is *owned by core* ([§4](#4-async-model)).
 
 No new crates beyond `kindboard-core` + `kindboard-app`. Optionally, dev-only
 integration tests live in `tests/` inside core.
+
+### 3.3 CI/CD system (GitHub Actions, ADR-0027)
+
+Three workflows build, gate, and publish the project. They are part of the
+system graph even though they live outside the app process: they own the
+release channel and the supply-chain evidence a consumer can verify.
+
+```mermaid
+graph LR
+  subgraph CI["ci.yml — every push + PR"]
+    Quality["fmt · clippy · tests · shellcheck"]
+    Matrix["release build: ubuntu / macos-13 / macos-14 / windows"]
+    Smoke["smoke: kindboard --version"]
+    Quality --> Matrix --> Smoke
+  end
+
+  subgraph Sec["security.yml — push / PR / weekly"]
+    Audit["cargo audit (RustSec)"]
+    Deny["cargo deny (deny.toml)"]
+    Leaks["gitleaks (full history)"]
+    DepRev["dependency review (PRs)"]
+  end
+
+  subgraph Rel["release.yml — tag v*"]
+    B["build 4 OS artifacts"]
+    S["SHA256SUMS"]
+    Sign["cosign keyless sign"]
+    Attest["SLSA provenance"]
+    Sbom["SPDX SBOM"]
+    Pub["publish GitHub release"]
+    B --> S --> Sign
+    Sign --> Attest
+    Sbom --> Sign
+    Attest --> Pub
+    Sign --> Pub
+    Sbom --> Pub
+  end
+
+  Tag["git tag vX.Y.Z"] -->|"push --tags"| Rel
+  style Rel fill:#4a4,color:#111
+  style Sec fill:#eee,color:#111
+```
+
+| Workflow | Owns |
+|---|---|
+| `ci.yml` | The merge gate: fmt, clippy `-D warnings`, tests, shellcheck, then a 3-OS release-build matrix + `--version` smoke test |
+| `security.yml` | Supply-chain + secret hygiene: cargo audit, cargo deny, gitleaks, dependency review (push/PR + weekly cron) |
+| `release.yml` | The tag-triggered release pipeline: build → SHA256SUMS → cosign keyless sign → SLSA attest → SPDX SBOM → GitHub release |
+
+All actions are SHA-pinned (40-hex commit SHAs). Permissions are least
+privilege: `contents: read` top-level; the release job alone escalates to
+`contents: write` + `id-token: write` + `attestations: write`.
+
+Failure boundary: a failing CI job blocks the merge or the release, but never
+touches the app runtime — CI and the desktop app share only the artifact
+contract, not a process.
 
 ## 4. Async model
 

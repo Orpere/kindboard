@@ -8,7 +8,10 @@
 //     No manual cache-version bump is needed per release anymore.
 //   - Everything else (images, favicons): CACHE-FIRST with a background
 //     refresh (stale-while-revalidate) — heavy, rarely-changed assets load
-//     instantly, and screenshots with new filenames are never stale.
+//     instantly. Screenshots are in this set, so when they are regenerated
+//     with the SAME filenames (e.g. a theme-visual refresh), bump
+//     CACHE_PREFIX below — otherwise returning visitors keep the stale copy
+//     until the background refresh completes.
 // Offline: the cached page + assets still serve fully after the first visit.
 // Plain ES5-style script.
 
@@ -16,7 +19,7 @@
 // kindboard deployments (or other projects) sharing one origin each keep
 // their own cache and this SW never deletes anything outside its scope.
 var SCOPE_PATH = new URL(self.registration.scope).pathname;
-var CACHE_PREFIX = "kindboard-site-v9:";
+var CACHE_PREFIX = "kindboard-site-v10:";
 var CACHE = CACHE_PREFIX + SCOPE_PATH;
 var ASSETS = [
   "./",

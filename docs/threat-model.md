@@ -1,6 +1,7 @@
 # kindboard — Threat Model
 
-> Living document. Last reviewed: 2026-09-15 (enterprise-compliance pass).
+> Living document. Last reviewed: 2026-09-15 (enterprise-compliance pass;
+> see ADR-0027).
 
 kindboard is a desktop app with root-equivalent reach on the developer's
 machine: it can talk to the Docker daemon (which is effectively root), rewrite

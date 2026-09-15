@@ -175,14 +175,15 @@ opt-in:
 | `--screenshot <file.png>` | Capture one screenshot then exit (CI / headless, e.g. on Xvfb) |
 | `--screenshot-every <secs> [--screenshot-dir <dir>]` | Capture periodically into a directory, then exit |
 
-Dev/CI environment knobs for the screenshot harness (headless documentation
-captures):
+Dev/CI environment knobs (headless screenshot captures + test automation):
 
 | Variable | Effect |
 |---|---|
-| `KINDBOARD_WINDOW_SIZE=WxH` | Override the initial window size (e.g. `640x480` to verify small frames) |
+| `KINDBOARD_WINDOW_SIZE=WxH` | Override the initial window size (e.g. `640x480` to verify small frames). **Wayland caveat:** on a Wayland host winit ignores this and produces a fixed-size framebuffer — unset `WAYLAND_DISPLAY` and run under Xvfb (see docs/howtos/install-kubectx.md) |
 | `KINDBOARD_OPEN_CLUSTER=<name>` | Auto-open a cluster tab once the first reconcile lands |
 | `KINDBOARD_OPEN_WIZARD=1` | Open the create wizard on the first frame |
+| `KINDBOARD_SELECT_NODE=<name>` | Pre-select a node in the topology once it arrives (pairs with `KINDBOARD_OPEN_CLUSTER`; headless — no pointer input) |
+| `KINDBOARD_AUTO_INSTALL=<tool>` | Auto-start a dependency install on startup (headless harness — no pointer input; the core pre-flight gate still skips tools already present) |
 | `KINDBOARD_RENDERER=glow\|wgpu` | Force the rendering backend (default: glow on macOS, wgpu elsewhere) |
 | `XDG_DATA_HOME=<dir>` | Point the state dir elsewhere; a `settings.json` with `{"theme":"light"}` renders that theme |
 
@@ -211,15 +212,19 @@ watch errors). Detached runs always write to a log file, so
 | `make build-all` | Attempt all supported targets: linux x86_64/aarch64, darwin x86_64/arm64, windows x86_64. Runs `darwin-bootstrap` first, then cross targets build when their toolchains are present (osxcross for darwin — see ADR-0017, mingw64-gcc for windows — see ADR-0019), else they are skipped with guidance |
 | `make dist-macos` | Cross-build darwin release assets with `KINDBOARD_REQUIRE_DARWIN=1`; auto-resolves all darwin dependencies first via `make darwin-bootstrap`; binaries are ad-hoc signed via rcodesign |
 | `make darwin-bootstrap` | Resolve all darwin (macOS) cross-build dependencies — host packages (sudo, confirm-first or `KINDBOARD_BOOTSTRAP_YES=1`), rustup targets, rcodesign, osxcross toolchain + digest-pinned SDK. Idempotent; `--check` mode via `./scripts/bootstrap-darwin.sh --check` |
+| `make release` | **Local** release producer (ADR-0027): tag `v$(VERSION)` + `gh release create` with the `dist/` tarballs/zip + `SHA256SUMS`. For offline/cross builds — not the canonical channel; CI (`release.yml`) signs/attests/SBOMs the same artifact contract on tag push |
+| `make publish` | Deploy `web/` to GitHub Pages via the `gh-pages` branch — the **only** step that still runs locally, not in Actions |
 | `make assets` | Fetch + resize the official logos into `assets/` (ImageMagick) |
 | `make clean` | Remove build artifacts and `dist/` |
 | `make help` | List all targets |
 
-Scripts: `scripts/build.sh` (reproducible release pipeline) ·
+Scripts: `scripts/build.sh` (local reproducible release pipeline) ·
 `scripts/install-macos.sh` / `scripts/install-windows.ps1` (prebuilt
 installers) · `scripts/check-targets.sh` (cross-target compile gate) ·
-`scripts/prepare-assets.sh` (logo pipeline). No GitHub Actions — builds are
-local by design.
+`scripts/prepare-assets.sh` (logo pipeline). Releases are **dual-producer**
+(ADR-0027): CI (`.github/workflows/release.yml`) is the canonical channel for
+tagged releases (signed + attested + SBOM); `make release` stays for offline
+and cross builds — both emit the same artifact contract.
 
 ## How kindboard works
 
@@ -262,7 +267,7 @@ between every module).
 | [docs/dependency-install-matrix.md](docs/dependency-install-matrix.md) | Detection commands, package names, pinned binary downloads per tool |
 | [docs/howtos/install-kubectx.md](docs/howtos/install-kubectx.md) | **How-to with screenshots:** install kubectx from the Dependencies panel |
 | [docs/howtos/create-cni-clusters.md](docs/howtos/create-cni-clusters.md) | **How-to with screenshots:** flannel, calico and cilium clusters, end to end |
-| [docs/adrs/](docs/adrs/) | Architecture decision records (ADR-0008 … 0016) |
+| [docs/adrs/](docs/adrs/) | Architecture decision records (ADR-0008 … 0027) |
 | [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md) | Logo ownership, sources and trademark notes |
 
 ## Website
