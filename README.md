@@ -182,6 +182,7 @@ captures):
 | `KINDBOARD_WINDOW_SIZE=WxH` | Override the initial window size (e.g. `640x480` to verify small frames) |
 | `KINDBOARD_OPEN_CLUSTER=<name>` | Auto-open a cluster tab once the first reconcile lands |
 | `KINDBOARD_OPEN_WIZARD=1` | Open the create wizard on the first frame |
+| `KINDBOARD_RENDERER=glow\|wgpu` | Force the rendering backend (default: glow on macOS, wgpu elsewhere) |
 | `XDG_DATA_HOME=<dir>` | Point the state dir elsewhere; a `settings.json` with `{"theme":"light"}` renders that theme |
 
 **Troubleshooting recipe:** run the app from a terminal without flags to see

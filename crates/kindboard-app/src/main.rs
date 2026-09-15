@@ -351,6 +351,35 @@ fn detach_self(args: &[String]) -> std::io::Result<std::process::Child> {
     build_detach_command(args).spawn()
 }
 
+/// Pick the eframe renderer.
+///
+/// Env override first (`KINDBOARD_RENDERER=glow|wgpu` — diagnostics and
+/// bisecting on machines we cannot reach), else the platform default:
+/// glow on macOS, wgpu everywhere else. See the `NativeOptions` comment at
+/// the call site for the macOS rationale.
+fn renderer_for_platform() -> eframe::Renderer {
+    match std::env::var("KINDBOARD_RENDERER").ok().as_deref() {
+        Some("glow") => eframe::Renderer::Glow,
+        Some("wgpu") => eframe::Renderer::Wgpu,
+        Some(other) => {
+            eprintln!(
+                "kindboard: ignoring invalid KINDBOARD_RENDERER={other:?} (use glow or wgpu)"
+            );
+            platform_renderer()
+        }
+        None => platform_renderer(),
+    }
+}
+
+/// The default renderer for the current platform.
+fn platform_renderer() -> eframe::Renderer {
+    if cfg!(target_os = "macos") {
+        eframe::Renderer::Glow
+    } else {
+        eframe::Renderer::Wgpu
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--version" || arg == "-V") {
@@ -481,6 +510,14 @@ fn main() {
 
     let options = eframe::NativeOptions {
         viewport,
+        // Renderer selection: macOS uses glow (OpenGL); every other
+        // platform keeps wgpu. egui 0.36 renders via wgpu→Metal on macOS,
+        // and that path has glyph-atlas update regressions: text that gets
+        // re-rasterized in a new color (kindboard swaps the label color on
+        // hover) can render blank. glow is the long-standing, stable macOS
+        // path and removes the whole failure class. Runtime-selectable, so
+        // non-macOS rendering behavior is unchanged.
+        renderer: renderer_for_platform(),
         ..Default::default()
     };
 
