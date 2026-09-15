@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 200" width="560" height="200" role="img" aria-label="O.R.P logo — Orlando Rosa Pereira">
+  <!-- Transparent lockup: three cluster nodes (O - R - P) wired as a mesh + wordmark -->
+
+  <!-- Mark -->
+  <g>
+    <path d="M118 58 L222 64 M118 84 L222 80 M78 112 L220 78" stroke="#3da5d9" stroke-width="6" stroke-linecap="round" fill="none" opacity="0.55"/>
+    <rect x="24" y="24" width="84" height="84" rx="17" fill="#3da5d9"/>
+    <text x="66" y="82" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="52" font-weight="700" fill="#0a0d11">R</text>
+    <rect x="24" y="116" width="84" height="84" rx="17" fill="#3da5d9" opacity="0.72"/>
+    <text x="66" y="174" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="52" font-weight="700" fill="#0a0d11">O</text>
+    <rect x="136" y="70" width="84" height="84" rx="17" fill="#2a769d"/>
+    <text x="178" y="128" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="52" font-weight="700" fill="#0a0d11">P</text>
+  </g>
+
+  <!-- Wordmark (light text for dark surfaces; transparent background) -->
+  <text x="252" y="78" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="64" font-weight="800" letter-spacing="4" fill="#e6edf3">O.R.P</text>
+  <text x="252" y="122" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="30" letter-spacing="2" fill="#3da5d9">Orlando Rosa Pereira</text>
+  <text x="252" y="160" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="18" letter-spacing="1" fill="#9aa6b4">Kubernetes · DevOps · Software</text>
+</svg>
