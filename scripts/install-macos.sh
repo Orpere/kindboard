@@ -49,6 +49,22 @@ usage() {
 }
 
 # ---------------------------------------------------------------------------
+# 0. curl capability preflight
+# ---------------------------------------------------------------------------
+
+# Old macOS system curl (and minimal/stub curls first on PATH) predate the
+# --proto flag; curl rejects an unknown option with exit 2 before honoring
+# --version, so a zero exit here is a reliable capability probe needing no
+# output parsing and no network. On degraded hosts we fall back to plain curl
+# and rely on the SHA256SUMS check below as the mandatory integrity anchor.
+if curl --proto '=https' --version >/dev/null 2>&1; then
+    kb_curl() { curl -fsSL --proto '=https' "$@"; }
+else
+    log "host curl lacks --proto support — falling back to plain curl (sha256 verification still enforced)"
+    kb_curl() { curl -fsSL "$@"; }
+fi
+
+# ---------------------------------------------------------------------------
 # 1. Args
 # ---------------------------------------------------------------------------
 
@@ -84,7 +100,7 @@ DEST="$INSTALL_DIR/kindboard"
 TAG="${KINDBOARD_VERSION:-}"
 if [[ -z "$TAG" ]]; then
     log "no KINDBOARD_VERSION set — resolving the latest release via the GitHub API"
-    if ! TAG="$(curl -fsSL --proto '=https' \
+    if ! TAG="$(kb_curl \
         https://api.github.com/repos/Orpere/kindboard/releases/latest \
         | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')"; then
         err "could not resolve the latest release — set KINDBOARD_VERSION=vX.Y.Z and retry (offline?)"
@@ -124,10 +140,10 @@ BASE="https://github.com/Orpere/kindboard/releases/download/${TAG}"
 TARBALL="kindboard-darwin-${ARCH}.tar.gz"
 
 log "downloading $BASE/$TARBALL"
-curl -fsSL --proto '=https' -o "$WORK_DIR/$TARBALL" "$BASE/$TARBALL" \
+kb_curl -o "$WORK_DIR/$TARBALL" "$BASE/$TARBALL" \
     || err "download failed: $BASE/$TARBALL"
 log "downloading $BASE/SHA256SUMS"
-curl -fsSL --proto '=https' -o "$WORK_DIR/SHA256SUMS" "$BASE/SHA256SUMS" \
+kb_curl -o "$WORK_DIR/SHA256SUMS" "$BASE/SHA256SUMS" \
     || err "download failed: $BASE/SHA256SUMS"
 
 # ---------------------------------------------------------------------------

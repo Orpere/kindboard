@@ -850,11 +850,13 @@ async fn execute_step(
                         source,
                     })?;
             }
-            let mut cmd = Cmd::new("curl")
-                .args(["-L", "--fail", "--silent", "--show-error"])
-                // HTTPS-only (initial URL and redirect targets) + a size cap
-                // so a hostile or broken endpoint cannot balloon disk usage.
-                .args(["--proto=https", "--proto-redir=https"])
+            let mut cmd = Cmd::new("curl").args(["-L", "--fail", "--silent", "--show-error"]);
+            // HTTPS-only (initial URL and redirect targets) when the host
+            // curl supports it, plus a size cap so a hostile or broken
+            // endpoint cannot balloon disk usage. The pinned sha256 check
+            // below is the mandatory integrity anchor.
+            cmd = cmd.args(crate::curl::secure_args(crate::curl::curl_caps()));
+            cmd = cmd
                 .args(["--max-filesize", "67108864"])
                 .args(["-o"])
                 .arg(dest.to_string_lossy().to_string())

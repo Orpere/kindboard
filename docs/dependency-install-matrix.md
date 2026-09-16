@@ -26,7 +26,7 @@ Every binary fallback download is verified against a **pinned SHA-256 digest** b
 | kubectx | GitHub release asset `checksums.txt` |
 | kustomize | GitHub release asset `checksums.txt` |
 
-All four platform variants (linux/darwin × amd64/arm64) are pinned. A digest mismatch aborts the install step. Downloads are HTTPS-only (`curl --proto=https --proto-redir=https`) with a 256 MiB size cap; provisioned manifests (flannel v0.28.9, calico v3.32.0, ingress-nginx v1.12.1, gateway-api v1.6.2) are tag-pinned **and** digest-checked at 64 MiB caps.
+All four platform variants (linux/darwin × amd64/arm64) are pinned. A digest mismatch aborts the install step. Downloads are HTTPS-only (`curl --proto '=https' --proto-redir '=https'`, the restrictive two-token form, applied when the host curl supports them — older/minimal curls degrade to plain curl) with a 256 MiB size cap; the pinned SHA-256 digest check is the mandatory integrity anchor on all platforms. Provisioned manifests (flannel v0.28.9, calico v3.32.0, ingress-nginx v1.12.1, gateway-api v1.6.2) are tag-pinned **and** digest-checked at 64 MiB caps.
 
 ## Summary table
 

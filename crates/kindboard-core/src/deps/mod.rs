@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
+use crate::curl::{self, CurlOpts};
 use crate::error::{DepsError, Result};
 use crate::exec::Cmd;
 
@@ -697,7 +698,22 @@ pub fn plan_install(id: ToolId) -> Result<InstallPlan> {
 }
 
 /// Compute the install plan for a given platform/bin-dir (pure; testable).
+///
+/// Uses the host curl's probed capabilities for the HTTPS-only download
+/// flags (see [`crate::curl`]).
 pub fn plan_install_for(id: ToolId, platform: &Platform, bin_dir: &Path) -> Result<InstallPlan> {
+    plan_install_for_with(id, platform, bin_dir, curl::curl_caps())
+}
+
+/// [`plan_install_for`] with the curl capabilities supplied explicitly —
+/// test seam so plan-shape assertions can pin a degraded (or fully-capable)
+/// curl without a real probe.
+fn plan_install_for_with(
+    id: ToolId,
+    platform: &Platform,
+    bin_dir: &Path,
+    caps: CurlOpts,
+) -> Result<InstallPlan> {
     let tool = tool(id).ok_or_else(|| DepsError::NotFound(id.to_string()))?;
     let mut steps = Vec::new();
     let mut verify = Vec::new();
@@ -809,7 +825,15 @@ pub fn plan_install_for(id: ToolId, platform: &Platform, bin_dir: &Path) -> Resu
             args,
         });
     } else if let Some(binary) = &tool.install.binary {
-        build_binary_steps(tool, binary, platform, bin_dir, &mut steps, &mut verify)?;
+        build_binary_steps(
+            tool,
+            binary,
+            platform,
+            bin_dir,
+            caps,
+            &mut steps,
+            &mut verify,
+        )?;
     } else {
         return Err(DepsError::NoInstallRecipe {
             tool: tool.display.to_string(),
@@ -868,11 +892,12 @@ fn build_binary_steps(
     binary: &BinaryDownload,
     platform: &Platform,
     bin_dir: &Path,
+    caps: CurlOpts,
     steps: &mut Vec<InstallStep>,
     verify: &mut Vec<DownloadVerify>,
 ) -> Result<()> {
     if platform.os == OsKind::Windows {
-        return build_binary_steps_windows(tool, binary, platform, bin_dir, steps, verify);
+        return build_binary_steps_windows(tool, binary, platform, bin_dir, caps, steps, verify);
     }
     let arch = arch_name();
     let url = render_platform(binary.url_template, platform, arch);
@@ -883,25 +908,28 @@ fn build_binary_steps(
         program: "mkdir".to_string(),
         args: vec!["-p".to_string(), bin_dir.to_string_lossy().to_string()],
     });
+    let mut args = vec![
+        "-L".to_string(),
+        "--fail".to_string(),
+        "--silent".to_string(),
+        "--show-error".to_string(),
+    ];
+    // HTTPS-only for both the request and any redirect target when the host
+    // curl supports it, and an upper bound on the artifact size (biggest
+    // binary today is ~76 MiB; 256 MiB leaves headroom while capping abuse).
+    // The pinned sha256 check below is the mandatory integrity anchor.
+    args.extend(curl::secure_args(caps).into_iter().map(|s| s.to_string()));
+    args.extend([
+        "--max-filesize".to_string(),
+        (256 * 1024 * 1024).to_string(),
+        "-o".to_string(),
+        download_path.to_string_lossy().to_string(),
+        url,
+    ]);
     steps.push(InstallStep {
         description: format!("download {}", tool.display),
         program: "curl".to_string(),
-        args: vec![
-            "-L".to_string(),
-            "--fail".to_string(),
-            "--silent".to_string(),
-            "--show-error".to_string(),
-            // HTTPS-only for both the request and any redirect target, and
-            // an upper bound on the artifact size (biggest binary today is
-            // ~76 MiB; 256 MiB leaves headroom while capping abuse).
-            "--proto=https".to_string(),
-            "--proto-redir=https".to_string(),
-            "--max-filesize".to_string(),
-            (256 * 1024 * 1024).to_string(),
-            "-o".to_string(),
-            download_path.to_string_lossy().to_string(),
-            url,
-        ],
+        args,
     });
 
     let key = platform_key(platform, arch);
@@ -1005,6 +1033,7 @@ fn build_binary_steps_windows(
     binary: &BinaryDownload,
     platform: &Platform,
     bin_dir: &Path,
+    caps: CurlOpts,
     steps: &mut Vec<InstallStep>,
     verify: &mut Vec<DownloadVerify>,
 ) -> Result<()> {
@@ -1040,22 +1069,27 @@ fn build_binary_steps_windows(
             ps_quote(bin_dir)
         )),
     });
+    let mut args = vec![
+        "-L".to_string(),
+        "--fail".to_string(),
+        "--silent".to_string(),
+        "--show-error".to_string(),
+    ];
+    // HTTPS-only for both the request and any redirect target when the host
+    // curl supports it, plus the size cap; the pinned sha256 check below is
+    // the mandatory integrity anchor.
+    args.extend(curl::secure_args(caps).into_iter().map(|s| s.to_string()));
+    args.extend([
+        "--max-filesize".to_string(),
+        (256 * 1024 * 1024).to_string(),
+        "-o".to_string(),
+        download_path.to_string_lossy().to_string(),
+        url,
+    ]);
     steps.push(InstallStep {
         description: format!("download {}", tool.display),
         program: "curl.exe".to_string(),
-        args: vec![
-            "-L".to_string(),
-            "--fail".to_string(),
-            "--silent".to_string(),
-            "--show-error".to_string(),
-            "--proto=https".to_string(),
-            "--proto-redir=https".to_string(),
-            "--max-filesize".to_string(),
-            (256 * 1024 * 1024).to_string(),
-            "-o".to_string(),
-            download_path.to_string_lossy().to_string(),
-            url,
-        ],
+        args,
     });
 
     let key = platform_key(platform, arch);
@@ -1445,6 +1479,14 @@ mod tests {
         Platform {
             os: OsKind::Macos,
             pkg_manager: Some(PkgManager::Brew),
+            pkexec: false,
+        }
+    }
+
+    fn macos_none() -> Platform {
+        Platform {
+            os: OsKind::Macos,
+            pkg_manager: None,
             pkexec: false,
         }
     }
@@ -2655,5 +2697,81 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn curl_flags_are_capability_gated_on_all_platforms() {
+        // Under CurlOpts::NONE (host curl lacking --proto/--proto-redir),
+        // every curl-family download step must drop the proto flags while
+        // keeping --max-filesize and its sha256 verify entry. Uses
+        // no-pkg-manager platforms so ToolId::Kind falls through to the
+        // binary download path on all three OS families (macos()/windows()
+        // carry Brew/Winget and would route to a package-manager step with
+        // no curl invocation).
+        let platforms: [Platform; 3] = [linux_none(), macos_none(), windows_none()];
+        for platform in &platforms {
+            let plan = plan_install_for_with(
+                ToolId::Kind,
+                platform,
+                Path::new("/tmp/bin"),
+                CurlOpts::NONE,
+            )
+            .unwrap();
+            let curl_step = plan
+                .steps
+                .iter()
+                .find(|step| {
+                    step.program.eq_ignore_ascii_case("curl")
+                        || step.program.eq_ignore_ascii_case("curl.exe")
+                })
+                .unwrap_or_else(|| panic!("no curl download step for {:?}", platform.os));
+            assert!(
+                !curl_step.args.iter().any(|arg| arg.starts_with("--proto")),
+                "proto flags must be dropped under CurlOpts::NONE: {:?}",
+                curl_step.args
+            );
+            assert!(
+                curl_step.args.iter().any(|arg| arg == "--max-filesize"),
+                "--max-filesize must remain: {:?}",
+                curl_step.args
+            );
+            let download_path = curl_step
+                .args
+                .iter()
+                .position(|arg| arg == "-o")
+                .and_then(|pos| curl_step.args.get(pos + 1))
+                .map(Path::new)
+                .expect("curl step must have -o <file>");
+            assert!(
+                plan.verify.iter().any(|check| check.file == download_path),
+                "no sha256 verify entry for {}",
+                download_path.display()
+            );
+        }
+
+        // The restrictive two-token form is emitted when the host curl
+        // supports it: `--proto` immediately followed by `=https`.
+        let all_plan = plan_install_for_with(
+            ToolId::Kind,
+            &linux_none(),
+            Path::new("/tmp/bin"),
+            CurlOpts::ALL,
+        )
+        .unwrap();
+        let all_curl = all_plan
+            .steps
+            .iter()
+            .find(|step| step.program.eq_ignore_ascii_case("curl"))
+            .expect("curl download step for linux_none");
+        let proto_pos = all_curl
+            .args
+            .iter()
+            .position(|arg| arg == "--proto")
+            .expect("--proto present under CurlOpts::ALL");
+        assert_eq!(
+            all_curl.args.get(proto_pos + 1).map(String::as_str),
+            Some("=https"),
+            "--proto must be followed by =https (restrictive form)"
+        );
     }
 }

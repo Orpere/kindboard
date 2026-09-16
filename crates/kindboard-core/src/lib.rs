@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod curl;
 pub mod deps;
 pub mod error;
 pub mod exec;
