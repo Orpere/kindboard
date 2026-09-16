@@ -487,7 +487,7 @@ fn main() {
     let shutdown_tx = buses.cmd_tx.clone();
     let worker_handle = worker::spawn(buses.cmd_rx, buses.event_tx);
 
-    // Window icon (tolerated when assets/icons/kindboard-64.png is absent).
+    // Window icon: the ORP mark, embedded at compile time (no file lookup).
     let icon: Option<Arc<egui::viewport::IconData>> = kindboard_app::icons::load_window_icon();
     // Dev/CI: override the initial window size via KINDBOARD_WINDOW_SIZE
     // ("WIDTHxHEIGHT") so the screenshot harness can verify every view at

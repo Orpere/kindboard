@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Kindboard
+GenericName=Kubernetes cluster manager
+Comment=Create, manage and inspect kind Kubernetes clusters
+Exec=@KINDBOARD_EXEC@
+Icon=kindboard
+Terminal=false
+Categories=Development;
+Keywords=kubernetes;k8s;kind;cluster;docker;
+StartupNotify=true

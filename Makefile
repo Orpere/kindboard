@@ -45,7 +45,7 @@ VERSION := $(shell grep -m1 '^version' crates/kindboard-app/Cargo.toml | cut -d'
 UNAME_S := $(shell uname -s)
 PAGES_DIR := /tmp/kindboard-pages
 
-.PHONY: help all build build-all dist-macos darwin-bootstrap run mac-app mac-install mac-run win-install win-run fmt fmt-check clippy test e2e audit deny check check-targets assets dist clean version release publish
+.PHONY: help all build build-all dist-macos darwin-bootstrap run mac-app mac-install mac-run install-linux run-linux win-install win-run fmt fmt-check clippy test e2e audit deny check check-targets assets dist clean version release publish
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -81,6 +81,12 @@ mac-install: ## (macOS) install the prebuilt signed kindboard from GitHub releas
 
 mac-run: ## (macOS) install (if needed) and launch kindboard — the zero-toolchain way to run
 	./scripts/install-macos.sh --run
+
+install-linux: ## (Linux) install kindboard + app-launcher icon locally (no sudo)
+	./scripts/install-linux.sh
+
+run-linux: ## (Linux) install (if needed) + launch kindboard
+	./scripts/install-linux.sh --run
 
 win-install: ## (Windows) install the prebuilt kindboard from GitHub releases — no admin, no SmartScreen prompt
 	powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1

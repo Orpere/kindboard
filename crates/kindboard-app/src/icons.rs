@@ -1,10 +1,11 @@
 //! Asset loading (window icon) and tool-logo painting.
 //!
-//! Tool logos are the official project logos (see assets/ATTRIBUTION.md),
-//! embedded at compile time. kubectl uses the Kubernetes logo (it is part
-//! of Kubernetes); kubectx has no official logo and falls back to a
-//! colored monogram box. Asset loading tolerates missing files: it logs
-//! once and continues — never a crash.
+//! All artwork is embedded at compile time: the window icon is the ORP
+//! mark (`assets/icons/orp-mark-64.png`) and the tool logos are the
+//! official project logos (see assets/ATTRIBUTION.md). kubectl uses the
+//! Kubernetes logo (it is part of Kubernetes); kubectx has no official
+//! logo and falls back to a colored monogram box. Decode failures log
+//! once and continue — never a crash.
 
 use std::sync::Arc;
 
@@ -12,18 +13,6 @@ use eframe::egui::{self, Color32, CornerRadius, Ui, Vec2};
 use kindboard_core::ToolId;
 
 use crate::util::{tool_color, tool_monogram};
-
-/// Candidate paths for the window icon, tried in order. The compile-time
-/// path anchors the repo layout; the relative ones work from `target/` and
-/// install dirs.
-const ICON_CANDIDATES: &[&str] = &[
-    concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../assets/icons/kindboard-64.png"
-    ),
-    "assets/icons/kindboard-64.png",
-    "../assets/icons/kindboard-64.png",
-];
 
 /// Official tool logo PNGs (64 px), embedded at compile time. `None` for
 /// tools without any official logo (kubectx) — the monogram fallback is
@@ -137,23 +126,18 @@ fn load_texture(
     Some(ctx.load_texture(name, color, egui::TextureOptions::LINEAR))
 }
 
-/// Load the window icon (`assets/icons/kindboard-64.png`) if present.
-/// Logs once when absent; returns `None` — the OS default icon is used.
+/// Load the window icon — the ORP mark (`assets/icons/orp-mark-64.png`),
+/// embedded at compile time. Returns `None` only if the embedded bytes
+/// fail to decode, in which case the OS default icon is used.
 pub fn load_window_icon() -> Option<Arc<egui::viewport::IconData>> {
-    for path in ICON_CANDIDATES {
-        match std::fs::read(path) {
-            Ok(bytes) => match decode_icon(&bytes) {
-                Ok(icon) => return Some(Arc::new(icon)),
-                Err(err) => log::warn!("kindboard: icon at {path} failed to decode: {err}"),
-            },
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(err) => log::warn!("kindboard: cannot read icon at {path}: {err}"),
+    const ORP_MARK_PNG: &[u8] = include_bytes!("../../../assets/icons/orp-mark-64.png");
+    match decode_icon(ORP_MARK_PNG) {
+        Ok(icon) => Some(Arc::new(icon)),
+        Err(err) => {
+            log::warn!("kindboard: embedded ORP mark icon failed to decode: {err}");
+            None
         }
     }
-    log::warn!(
-        "kindboard: no window icon found (expected assets/icons/kindboard-64.png); using the OS default icon"
-    );
-    None
 }
 
 /// Decode PNG bytes into an [`egui::viewport::IconData`] (RGBA8).

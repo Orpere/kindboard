@@ -135,6 +135,12 @@ registry writes; x86_64 only. Windows from source: native
 is bash-only, so windows cross-builds happen on Linux (mingw64-gcc, see
 ADR-0019).
 
+**Linux desktop:** `make install-linux` (or `./scripts/install-linux.sh`)
+installs the release binary to `~/.local/bin` and the app-launcher icon +
+`.desktop` entry to `~/.local/share`, so kindboard shows up in your launcher
+(fuzzel/niri, GNOME, KDE). `make run-linux` installs if needed, then launches.
+No sudo, no system paths — everything stays user-scoped in `~/.local`.
+
 **From source** (Rust 1.98+):
 
 ```bash
