@@ -3,7 +3,11 @@
 //! Every CLI invocation the app needs lives here so argument construction is
 //! centralized, reviewable, and testable. [`KindCommand::to_cmd`] turns a
 //! variant into an [`exec::Cmd`] with an args-only argv (ADR-0009 — never
-//! shell interpolation) and a per-variant timeout.
+//! shell interpolation) and a per-variant timeout. The returned command
+//! spawns with the same extended PATH dependency detection uses
+//! ([`crate::deps::effective_path_entries`] — process PATH + `~/.local/bin` +
+//! Homebrew dirs on macOS), so binaries installed via the Dependencies view
+//! resolve under a desktop-launcher minimal PATH.
 //!
 //! Parsers for human-oriented `kind` output (`kind get clusters`,
 //! `kind get nodes --name X`) are provided as pure functions so tests never
@@ -22,6 +26,8 @@ pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(600);
 pub const CREATE_TIMEOUT: Duration = Duration::from_secs(300);
 /// Timeout for everything else.
 pub const GENERAL_TIMEOUT: Duration = Duration::from_secs(60);
+/// Timeout for `kind export logs` (whole-cluster log collection is slow).
+pub const EXPORT_LOGS_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Exec budget for `kubectl wait` steps: must exceed the longest internal
 /// `--timeout` (node-ready waits use `2m`) plus polling margin. The internal
@@ -73,6 +79,13 @@ pub enum KindCommand {
         name: String,
         /// Docker image reference.
         image: String,
+    },
+    /// `kind export logs <dest> --name <name>`
+    KindExportLogs {
+        /// Destination directory for the exported logs.
+        dest: PathBuf,
+        /// Cluster name.
+        name: String,
     },
 
     // ---- docker (node/log inspection) ----
@@ -311,7 +324,7 @@ impl KindCommand {
         let (program, args, timeout) = self.to_program_args_and_timeout();
         let mut cmd = Cmd::new(program).args(args);
         cmd = cmd.timeout(timeout);
-        cmd
+        crate::deps::with_effective_path(cmd)
     }
 
     /// The (program, argv) pair for this variant.
@@ -389,6 +402,17 @@ impl KindCommand {
                     name.clone(),
                 ],
                 GENERAL_TIMEOUT,
+            ),
+            KindCommand::KindExportLogs { dest, name } => (
+                "kind",
+                vec![
+                    "export".into(),
+                    "logs".into(),
+                    dest.to_string_lossy().to_string(),
+                    "--name".into(),
+                    name.clone(),
+                ],
+                EXPORT_LOGS_TIMEOUT,
             ),
             KindCommand::DockerVersion => (
                 "docker",
@@ -886,6 +910,28 @@ mod tests {
         .to_program_and_args();
         assert_eq!(prog, "kind");
         assert_eq!(args, vec!["delete", "cluster", "--name", "demo"]);
+    }
+
+    #[test]
+    fn kind_export_logs_argv_and_timeout() {
+        let (prog, args) = KindCommand::KindExportLogs {
+            dest: PathBuf::from("/tmp/kind-logs"),
+            name: "demo".into(),
+        }
+        .to_program_and_args();
+        assert_eq!(prog, "kind");
+        assert_eq!(
+            args,
+            vec!["export", "logs", "/tmp/kind-logs", "--name", "demo"]
+        );
+        assert_eq!(
+            KindCommand::KindExportLogs {
+                dest: PathBuf::from("/tmp/kind-logs"),
+                name: "demo".into(),
+            }
+            .default_timeout(),
+            EXPORT_LOGS_TIMEOUT
+        );
     }
 
     #[test]
@@ -1402,5 +1448,32 @@ mod tests {
         let cmd = KindCommand::KindGetClusters.to_cmd();
         assert_eq!(cmd.argv(), vec!["kind", "get", "clusters"]);
         assert_eq!(cmd.deadline(), GENERAL_TIMEOUT);
+    }
+
+    #[test]
+    fn to_cmd_injects_effective_path() {
+        let cmd = KindCommand::CiliumInstall {
+            context: "kbtest".into(),
+            version: None,
+            sets: vec!["ipam.mode=kubernetes".into()],
+            wait: true,
+        }
+        .to_cmd();
+        let expected_path = std::env::join_paths(crate::deps::effective_path_entries())
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        assert_eq!(cmd.env_var("PATH"), Some(expected_path.as_str()));
+        assert_eq!(
+            cmd.argv(),
+            vec![
+                "cilium",
+                "install",
+                "--context",
+                "kbtest",
+                "--set",
+                "ipam.mode=kubernetes",
+                "--wait"
+            ]
+        );
     }
 }

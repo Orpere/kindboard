@@ -138,6 +138,11 @@ impl Cmd {
         self
     }
 
+    /// Value of an explicitly-set environment variable, if any.
+    pub fn env_var(&self, key: &str) -> Option<&str> {
+        self.env.get(key).map(String::as_str)
+    }
+
     /// Attach a cancellation token. When it fires (or the timeout expires),
     /// the process group gets TERM, then KILL after [`KILL_GRACE`].
     pub fn cancel(mut self, token: CancellationToken) -> Self {

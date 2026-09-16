@@ -861,6 +861,7 @@ async fn execute_step(
                 .args(["-o"])
                 .arg(dest.to_string_lossy().to_string())
                 .arg(*url);
+            cmd = crate::deps::with_effective_path(cmd);
             if let Some(token) = cancel {
                 cmd = cmd.cancel(token.clone());
             }

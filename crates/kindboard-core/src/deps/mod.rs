@@ -402,6 +402,27 @@ pub fn effective_path_entries() -> Vec<PathBuf> {
     dirs
 }
 
+/// Apply the effective search PATH (process PATH + `~/.local/bin` +
+/// Homebrew dirs on macOS, deduped, original order preserved) to a child
+/// command, so binaries installed via the Dependencies view resolve at
+/// spawn time even when the app was launched from a desktop launcher with
+/// a minimal PATH. On join failure the command is returned unchanged
+/// (inherited PATH). Precedence is preserved: process-PATH entries come
+/// first, so existing behavior for system tools is identical.
+pub fn with_effective_path(cmd: Cmd) -> Cmd {
+    match std::env::join_paths(effective_path_entries()) {
+        Ok(paths) => {
+            let joined = paths.to_string_lossy().to_string();
+            if joined.is_empty() {
+                cmd
+            } else {
+                cmd.env("PATH", joined)
+            }
+        }
+        Err(_) => cmd,
+    }
+}
+
 /// Look `command` up in the given directories (PATH semantics: first match
 /// wins; must be a file with the executable bit set — on Windows, PATHEXT
 /// probing: `command`, then `command.exe`, `command.bat`, `command.cmd`).
@@ -1272,9 +1293,7 @@ async fn install_with_progress_preflighted(
                 description: step.description.clone(),
             })
             .await;
-        let mut cmd = Cmd::new(&step.program)
-            .args(step.args.iter().cloned())
-            .timeout(step_timeout(step));
+        let mut cmd = install_step_cmd(step);
         if let Some(token) = &cancel {
             cmd = cmd.cancel(token.clone());
         }
@@ -1387,6 +1406,17 @@ fn step_timeout(step: &InstallStep) -> std::time::Duration {
         }
         _ => PKG_INSTALL_TIMEOUT,
     }
+}
+
+/// The command for one install-plan step, spawned with the same effective
+/// PATH dependency detection uses (see [`with_effective_path`]) so the
+/// package manager / downloader the plan selected can actually be spawned.
+fn install_step_cmd(step: &InstallStep) -> Cmd {
+    crate::deps::with_effective_path(
+        Cmd::new(&step.program)
+            .args(step.args.iter().cloned())
+            .timeout(step_timeout(step)),
+    )
 }
 
 /// Verify that a downloaded file's SHA-256 matches the pinned digest.
@@ -1871,6 +1901,65 @@ mod tests {
             "effective path must include {0}; got {after:?}",
             local_bin_dir().display()
         );
+    }
+
+    #[test]
+    fn with_effective_path_sets_path_env_with_local_bin_dir() {
+        let cmd = with_effective_path(Cmd::new("cilium"));
+        let path = cmd
+            .env_var("PATH")
+            .expect("PATH must be set on the wrapped command");
+        let local_bin = local_bin_dir().display().to_string();
+        assert!(
+            path.contains(&local_bin),
+            "PATH {path:?} must contain {local_bin}"
+        );
+        let first = effective_path_entries()
+            .into_iter()
+            .next()
+            .expect("effective path must be non-empty");
+        let first = first.display().to_string();
+        assert!(
+            path.starts_with(&first),
+            "PATH {path:?} must start with first entry {first} (precedence preserved)"
+        );
+    }
+
+    #[test]
+    fn with_effective_path_preserves_program_args_and_timeout() {
+        let deadline = std::time::Duration::from_secs(42);
+        let cmd = with_effective_path(
+            Cmd::new("cilium")
+                .args(["install", "--wait"])
+                .timeout(deadline),
+        );
+        assert_eq!(cmd.program(), "cilium");
+        assert_eq!(cmd.argv(), vec!["cilium", "install", "--wait"]);
+        assert_eq!(cmd.deadline(), deadline);
+    }
+
+    #[test]
+    fn install_step_cmd_injects_effective_path() {
+        let plan = plan_install_for(ToolId::Kind, &linux_none(), Path::new("/tmp/bin")).unwrap();
+        assert!(
+            !plan.steps.is_empty(),
+            "Kind linux_none plan must have at least one step"
+        );
+        let step = &plan.steps[0];
+        let cmd = install_step_cmd(step);
+        let path = cmd
+            .env_var("PATH")
+            .expect("PATH must be set on the install step command");
+        let local_bin = local_bin_dir().display().to_string();
+        assert!(
+            path.contains(&local_bin),
+            "PATH {path:?} must contain {local_bin}"
+        );
+        assert_eq!(cmd.program(), step.program.as_str());
+        let expected_argv = std::iter::once(step.program.clone())
+            .chain(step.args.iter().cloned())
+            .collect::<Vec<_>>();
+        assert_eq!(cmd.argv(), expected_argv);
     }
 
     // ---- docker daemon probe ----

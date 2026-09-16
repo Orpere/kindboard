@@ -27,7 +27,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use kindboard_core::{
-    self as core, ClusterRecord, ClusterSpec, Cmd, CmdOutput, DataDir, InstallEvent, K8sClient,
+    self as core, ClusterRecord, ClusterSpec, CmdOutput, DataDir, InstallEvent, K8sClient,
     KindCommand, KubeconfigStore, LogRing, LogSource, ProvisionEvent, ToolId, TopologyGraph,
 };
 
@@ -346,13 +346,17 @@ fn op_token(cancels: &mut HashMap<String, CancellationToken>, key: &str) -> Canc
 /// terminal outlives the app).
 fn open_k9s(name: &str, event_tx: &Sender<CoreEvent>) {
     let context = KubeconfigStore::kind_context_name(name);
+    let k9s_bin =
+        kindboard_core::deps::find_in_path(&kindboard_core::deps::effective_path_entries(), "k9s")
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|| "k9s".to_string());
     // Resolution order (ADR-0023): `$TERMINAL` / known emulators on PATH,
     // then the OS-default terminal, so k9s always opens a window on every
     // supported OS.
     let argv = match detect_terminal() {
-        Some(terminal) => k9s_argv(&terminal.to_string_lossy(), &context),
-        None if cfg!(target_os = "macos") => macos_default_argv(&context),
-        None if cfg!(windows) => windows_default_argv(&context),
+        Some(terminal) => k9s_argv(&terminal.to_string_lossy(), &k9s_bin, &context),
+        None if cfg!(target_os = "macos") => macos_default_argv(&k9s_bin, &context),
+        None if cfg!(windows) => windows_default_argv(&k9s_bin, &context),
         None => {
             emit_important(
                 event_tx,
@@ -433,8 +437,10 @@ fn detect_terminal() -> Option<PathBuf> {
 ///
 /// Most terminals accept `-e <program> <args...>` (xterm-compatible); kitty
 /// takes the program directly (its short opts have no `-e`) and
-/// gnome-terminal uses `--`.
-fn k9s_argv(terminal: &str, context: &str) -> Vec<String> {
+/// gnome-terminal uses `--`. `k9s_bin` is the resolved absolute path (or the
+/// bare fallback name when k9s is absent) so the terminal inheriting a
+/// minimal desktop PATH still finds it.
+fn k9s_argv(terminal: &str, k9s_bin: &str, context: &str) -> Vec<String> {
     let exec_flag = if terminal.ends_with("gnome-terminal") || terminal.ends_with("kitty") {
         "--"
     } else {
@@ -443,7 +449,7 @@ fn k9s_argv(terminal: &str, context: &str) -> Vec<String> {
     vec![
         terminal.to_string(),
         exec_flag.to_string(),
-        "k9s".to_string(),
+        k9s_bin.to_string(),
         "--context".to_string(),
         context.to_string(),
     ]
@@ -469,8 +475,12 @@ fn applescript_string_escape(s: &str) -> String {
 ///
 /// A pure helper (not cfg-gated) so it is unit-testable on any host; only
 /// the dispatch in `open_k9s` is `cfg!(target_os = "macos")`.
-fn macos_default_argv(context: &str) -> Vec<String> {
-    let command = applescript_string_escape(&format!("k9s --context {}", sh_single_quote(context)));
+fn macos_default_argv(k9s_bin: &str, context: &str) -> Vec<String> {
+    let command = applescript_string_escape(&format!(
+        "{} --context {}",
+        sh_single_quote(k9s_bin),
+        sh_single_quote(context)
+    ));
     vec![
         "osascript".to_string(),
         "-e".to_string(),
@@ -497,13 +507,13 @@ fn windows_quote(s: &str) -> String {
 /// would consume the next quoted argument as the title).
 ///
 /// A pure helper (not cfg-gated) for the same testability reason.
-fn windows_default_argv(context: &str) -> Vec<String> {
+fn windows_default_argv(k9s_bin: &str, context: &str) -> Vec<String> {
     vec![
         "cmd".to_string(),
         "/C".to_string(),
         "start".to_string(),
         String::new(),
-        "k9s".to_string(),
+        windows_quote(k9s_bin),
         "--context".to_string(),
         windows_quote(context),
     ]
@@ -982,15 +992,13 @@ async fn do_ensure_context(name: String, env: WorkerEnv, event_tx: Sender<CoreEv
     );
 }
 
-/// `kind export logs` into a directory. (Core gap: [`KindCommand`] has no
-/// export-logs variant; the exec module — core's sanctioned spawn surface —
-/// builds the argv directly. See report.)
+/// `kind export logs` into a directory.
 async fn do_export_logs(name: String, dest: PathBuf, event_tx: Sender<CoreEvent>) {
-    let command = Cmd::new("kind")
-        .args(["export", "logs"])
-        .arg(dest.to_string_lossy().to_string())
-        .args(["--name", name.as_str()])
-        .timeout(Duration::from_secs(300));
+    let command = KindCommand::KindExportLogs {
+        dest: dest.clone(),
+        name: name.clone(),
+    }
+    .to_cmd();
     let result = command
         .run()
         .await
@@ -1261,20 +1269,20 @@ mod tests {
     #[test]
     fn k9s_argv_uses_e_flag_and_context() {
         assert_eq!(
-            k9s_argv("foot", "kind-demo"),
+            k9s_argv("foot", "k9s", "kind-demo"),
             vec!["foot", "-e", "k9s", "--context", "kind-demo"]
         );
         assert_eq!(
-            k9s_argv("alacritty", "kind-demo"),
+            k9s_argv("alacritty", "k9s", "kind-demo"),
             vec!["alacritty", "-e", "k9s", "--context", "kind-demo"]
         );
         // kitty has no -e short flag: the program goes after `--`.
         assert_eq!(
-            k9s_argv("kitty", "kind-demo"),
+            k9s_argv("kitty", "k9s", "kind-demo"),
             vec!["kitty", "--", "k9s", "--context", "kind-demo"]
         );
         assert_eq!(
-            k9s_argv("gnome-terminal", "kind-demo"),
+            k9s_argv("gnome-terminal", "k9s", "kind-demo"),
             vec!["gnome-terminal", "--", "k9s", "--context", "kind-demo"]
         );
     }
@@ -1288,15 +1296,16 @@ mod tests {
 
     #[test]
     fn macos_default_argv_drives_terminal_app_with_quoted_context() {
-        let argv = macos_default_argv("kind-demo");
+        let argv = macos_default_argv("k9s", "kind-demo");
         assert_eq!(argv[0], "osascript");
         assert_eq!(argv[1], "-e");
         assert_eq!(argv[3], "-e");
         assert_eq!(argv[4], "tell application \"Terminal\" to activate");
-        // The do-script string runs `k9s --context 'kind-demo'` via the
-        // Terminal shell: sh-quoted, then AppleScript-escaped.
+        // The do-script string runs `'k9s' --context 'kind-demo'` via the
+        // Terminal shell: both the binary and context sh-quoted, then
+        // AppleScript-escaped.
         assert!(argv[2].starts_with(
-            "tell application \"Terminal\" to do script \"k9s --context 'kind-demo'\""
+            "tell application \"Terminal\" to do script \"'k9s' --context 'kind-demo'\""
         ));
     }
 
@@ -1304,16 +1313,16 @@ mod tests {
     fn macos_default_argv_escapes_shell_and_applescript_metacharacters() {
         // A single quote must round-trip through sh single-quoting; the
         // backslash is then doubled by the AppleScript-escape layer.
-        let argv = macos_default_argv("a'b");
+        let argv = macos_default_argv("k9s", "a'b");
         assert!(
-            argv[2].contains("k9s --context 'a'\\\\''b'"),
+            argv[2].contains("'k9s' --context 'a'\\\\''b'"),
             "got: {}",
             argv[2]
         );
 
         // Double quotes and backslashes must be escaped for the AppleScript
         // string literal (which the sh layer keeps literal inside quotes).
-        let argv = macos_default_argv("a\"b\\c");
+        let argv = macos_default_argv("k9s", "a\"b\\c");
         assert!(argv[2].contains("'a\\\"b\\\\c'"), "got: {}", argv[2]);
     }
 
@@ -1328,10 +1337,10 @@ mod tests {
     #[test]
     fn windows_default_argv_opens_default_console_with_quoted_context() {
         assert_eq!(
-            windows_default_argv("kind-demo"),
+            windows_default_argv("k9s", "kind-demo"),
             vec!["cmd", "/C", "start", "", "k9s", "--context", "kind-demo"]
         );
-        let argv = windows_default_argv("my cluster");
+        let argv = windows_default_argv("k9s", "my cluster");
         assert_eq!(argv[0], "cmd");
         assert_eq!(
             argv[3], "",
@@ -1339,5 +1348,47 @@ mod tests {
         );
         assert_eq!(argv[4], "k9s");
         assert_eq!(argv[6], "\"my cluster\"");
+    }
+
+    #[test]
+    fn k9s_argvs_embed_resolved_binary_path() {
+        // R3: the terminal inherits a minimal desktop PATH, so k9s must be
+        // passed as a resolved absolute path — never the bare name.
+        assert_eq!(
+            k9s_argv("/usr/bin/foot", "/home/u/.local/bin/k9s", "ctx"),
+            vec![
+                "/usr/bin/foot",
+                "-e",
+                "/home/u/.local/bin/k9s",
+                "--context",
+                "ctx"
+            ]
+        );
+
+        // macOS: the resolved path lands inside the `do script` string,
+        // sh-quoted (the plain path is wrapped in single quotes).
+        let mac = macos_default_argv("/opt/x/k9s", "ctx");
+        assert!(
+            mac[2].contains("'/opt/x/k9s' --context 'ctx'"),
+            "got: {}",
+            mac[2]
+        );
+        // A home path with spaces must be single-quoted so the Terminal shell
+        // does not word-split it.
+        let mac_spaced = macos_default_argv("/Users/John Smith/.local/bin/k9s", "ctx");
+        assert!(
+            mac_spaced[2].contains("'/Users/John Smith/.local/bin/k9s' --context 'ctx'"),
+            "got: {}",
+            mac_spaced[2]
+        );
+
+        // Windows: the resolved path is embedded at the command position,
+        // `windows_quote`d only when it contains whitespace; the (spaced)
+        // context is quoted as before.
+        let win = windows_default_argv("/opt/x/k9s", "my cluster");
+        assert_eq!(win[4], "/opt/x/k9s");
+        assert_eq!(win[6], "\"my cluster\"");
+        let win_spaced = windows_default_argv("/Users/John Smith/.local/bin/k9s", "ctx");
+        assert_eq!(win_spaced[4], "\"/Users/John Smith/.local/bin/k9s\"");
     }
 }
